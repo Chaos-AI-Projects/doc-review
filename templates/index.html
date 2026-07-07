@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}doc-review — files{% endblock %}
+{% block content %}
+<h1>Files in {{ root }}</h1>
+{% if files %}
+<ul class="file-list">
+    {% for f in files %}
+    <li><a href="/view?path={{ f | urlencode }}">{{ f }}</a></li>
+    {% endfor %}
+</ul>
+{% else %}
+<p>No reviewable files found (markdown, org, or txt).</p>
+{% endif %}
+{% endblock %}

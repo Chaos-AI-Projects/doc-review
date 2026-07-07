@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}doc-review — {{ path }}{% endblock %}
+{% block content %}
+<div class="file-header">
+    <h1>{{ path }}</h1>
+    <span class="file-id" title="file_id">{{ file_id[:12] }}&hellip;</span>
+</div>
+
+<div class="review-container">
+    <!-- Source lines -->
+    <table class="source-lines" id="source">
+        <tbody>
+        {% for line in lines %}
+        <tr id="L{{ line.number }}" class="source-line{% if line.number in comments_by_line %} has-comments{% endif %}">
+            <td class="line-num" data-line="{{ line.number }}">{{ line.number }}</td>
+            <td class="line-content">{{ line.html | safe }}</td>
+            <td class="line-marker">
+                {% if line.number in comments_by_line %}
+                <button class="marker-btn" data-line="{{ line.number }}" title="{{ comments_by_line[line.number] | length }} comment(s)">
+                    {{ comments_by_line[line.number] | length }}
+                </button>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- Comment sidebar (desktop) / inline panel (mobile) -->
+    <aside class="comment-sidebar" id="sidebar">
+        <div id="sidebar-content">
+            <p class="sidebar-hint">Click a line number to add a comment.</p>
+        </div>
+    </aside>
+</div>
+
+<!-- Comment form (hidden, cloned by JS) -->
+<template id="comment-form-tpl">
+    <form class="comment-form" method="post" action="/comment">
+        <input type="hidden" name="file_id" value="{{ file_id }}">
+        <input type="hidden" name="path" value="{{ path }}">
+        <input type="hidden" name="line_start" value="">
+        <input type="hidden" name="line_end" value="">
+        <input type="hidden" name="parent_id" value="0">
+        <label>Author
+            <input type="text" name="author" required placeholder="Your name">
+        </label>
+        <label>Comment
+            <textarea name="body" required rows="3" placeholder="Write a comment…"></textarea>
+        </label>
+        <button type="submit">Post</button>
+        <button type="button" class="cancel-btn">Cancel</button>
+    </form>
+</template>
+
+<!-- Pre-rendered comment data for JS -->
+<script id="comments-data" type="application/json">
+{{ comments_by_line | safe_tojson }}
+</script>
+<script id="replies-data" type="application/json">
+{{ reply_map | safe_tojson }}
+</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/app.js"></script>
+{% endblock %}
