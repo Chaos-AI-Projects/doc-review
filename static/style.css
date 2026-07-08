@@ -10,6 +10,7 @@
     --sidebar-w: 360px;
     --line-hover: #f3f4f6;
     --has-comment: #fef3c7;
+    --nav-w: 220px;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -42,11 +43,76 @@ main { padding: 1rem; }
 .file-header h1 { font-size: 1.25rem; }
 .file-id { font-size: .75rem; color: #666; font-family: monospace; }
 
-/* ── Review container (desktop: source + sidebar) ── */
-.review-container {
+/* ── File navigator toggle (mobile) ── */
+.file-nav-toggle {
+    display: none;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .25rem .5rem;
+    cursor: pointer;
+    font-size: .85rem;
+    color: var(--accent);
+}
+
+/* ── View layout (nav + review container) ── */
+.view-layout {
     display: flex;
     gap: 0;
     align-items: flex-start;
+}
+
+/* ── File navigator ── */
+.file-nav {
+    width: var(--nav-w);
+    min-width: var(--nav-w);
+    max-height: 90vh;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    padding: .5rem 0;
+    background: #fff;
+    position: sticky;
+    top: 0;
+}
+
+.file-nav-list {
+    list-style: none;
+}
+
+.file-nav-list li {
+    padding: 0;
+}
+
+.file-nav-link {
+    display: block;
+    padding: .25rem .75rem;
+    color: var(--fg);
+    text-decoration: none;
+    font-size: .8rem;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-nav-link:hover {
+    background: var(--line-hover);
+    color: var(--accent);
+}
+
+.file-nav-link.active {
+    background: #dbeafe;
+    color: var(--accent);
+    font-weight: 600;
+}
+
+/* ── Review container (source + sidebar) ── */
+.review-container {
+    display: flex;
+    flex: 1 1 0;
+    gap: 0;
+    align-items: flex-start;
+    min-width: 0;
 }
 
 /* ── Source lines table ── */
@@ -69,17 +135,16 @@ main { padding: 1rem; }
     padding: 0 .75em 0 .5em;
     color: #9ca3af;
     user-select: none;
-    cursor: pointer;
     vertical-align: top;
     white-space: nowrap;
 }
-.line-num:hover { color: var(--accent); }
 
 .line-content {
     padding: 0 .5em;
     overflow-wrap: break-word;
     word-break: break-all;
     white-space: pre-wrap;
+    cursor: pointer;
 }
 
 .line-marker {
@@ -178,7 +243,26 @@ main { padding: 1rem; }
 
 /* ── Mobile responsive ── */
 @media (max-width: 768px) {
+    .view-layout { flex-direction: column; }
     .review-container { flex-direction: column; }
+
+    .file-nav {
+        display: none;
+        width: 100%;
+        min-width: 100%;
+        max-height: 50vh;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        position: static;
+    }
+
+    .file-nav.open {
+        display: block;
+    }
+
+    .file-nav-toggle {
+        display: inline-block;
+    }
 
     .comment-sidebar {
         display: none;

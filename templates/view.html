@@ -4,34 +4,46 @@
 <div class="file-header">
     <h1>{{ path }}</h1>
     <span class="file-id" title="file_id">{{ file_id[:12] }}&hellip;</span>
+    <button class="file-nav-toggle" id="nav-toggle" title="Toggle file navigator">&#9776; Files</button>
 </div>
 
-<div class="review-container">
-    <!-- Source lines -->
-    <table class="source-lines" id="source">
-        <tbody>
-        {% for line in lines %}
-        <tr id="L{{ line.number }}" class="source-line{% if line.number in comments_by_line %} has-comments{% endif %}">
-            <td class="line-num" data-line="{{ line.number }}">{{ line.number }}</td>
-            <td class="line-content">{{ line.html | safe }}</td>
-            <td class="line-marker">
-                {% if line.number in comments_by_line %}
-                <button class="marker-btn" data-line="{{ line.number }}" title="{{ comments_by_line[line.number] | length }} comment(s)">
-                    {{ comments_by_line[line.number] | length }}
-                </button>
-                {% endif %}
-            </td>
-        </tr>
+<div class="view-layout">
+    <!-- File navigator -->
+    <nav class="file-nav" id="file-nav">
+        <ul class="file-nav-list">
+        {% for f in files %}
+            <li><a href="/view?path={{ f | urlencode }}" class="file-nav-link{% if f == path %} active{% endif %}">{{ f }}</a></li>
         {% endfor %}
-        </tbody>
-    </table>
+        </ul>
+    </nav>
 
-    <!-- Comment sidebar (desktop) / inline panel (mobile) -->
-    <aside class="comment-sidebar" id="sidebar">
-        <div id="sidebar-content">
-            <p class="sidebar-hint">Click a line number to add a comment.</p>
-        </div>
-    </aside>
+    <div class="review-container">
+        <!-- Source lines -->
+        <table class="source-lines" id="source">
+            <tbody>
+            {% for line in lines %}
+            <tr id="L{{ line.number }}" class="source-line{% if line.number in comments_by_line %} has-comments{% endif %}">
+                <td class="line-num" data-line="{{ line.number }}">{{ line.number }}</td>
+                <td class="line-content" data-line="{{ line.number }}">{{ line.html | safe }}</td>
+                <td class="line-marker">
+                    {% if line.number in comments_by_line %}
+                    <button class="marker-btn" data-line="{{ line.number }}" title="{{ comments_by_line[line.number] | length }} comment(s)">
+                        {{ comments_by_line[line.number] | length }}
+                    </button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+
+        <!-- Comment sidebar (desktop) / inline panel (mobile) -->
+        <aside class="comment-sidebar" id="sidebar">
+            <div id="sidebar-content">
+                <p class="sidebar-hint">Click a line to add a comment.</p>
+            </div>
+        </aside>
+    </div>
 </div>
 
 <!-- Comment form (hidden, cloned by JS) -->

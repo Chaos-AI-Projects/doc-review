@@ -116,6 +116,8 @@ async def view_file(request: Request, path: str = Query(...)):
     finally:
         conn.close()
 
+    all_files = _list_files(_source_root)
+
     return templates.TemplateResponse(
         request,
         "view.html",
@@ -125,6 +127,7 @@ async def view_file(request: Request, path: str = Query(...)):
             "lines": lines,
             "comments_by_line": comments_by_line,
             "reply_map": reply_map,
+            "files": all_files,
         },
     )
 

@@ -65,6 +65,37 @@ class TestViewFile:
         assert 'id="L1"' in resp.text
         assert 'data-line="1"' in resp.text
 
+    def test_view_contains_file_navigator(self, client):
+        """View page includes a file-nav list with all files."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        assert 'class="file-nav"' in resp.text
+        # All files should be listed in the navigator
+        assert "test.md" in resp.text
+        assert "sub/nested.md" in resp.text
+
+    def test_file_navigator_highlights_current_file(self, client):
+        """Current file has the 'active' marker in the file navigator."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        # The current file link should have an active/current class
+        assert 'class="file-nav-link active"' in resp.text
+
+    def test_file_navigator_present_for_nested_file(self, client):
+        """File navigator works when viewing a nested file."""
+        resp = client.get("/view?path=sub/nested.md")
+        assert resp.status_code == 200
+        assert 'class="file-nav"' in resp.text
+        # Both files listed, nested one is active
+        assert "test.md" in resp.text
+        assert "sub/nested.md" in resp.text
+
+    def test_line_content_has_data_line_attr(self, client):
+        """Line content cells have data-line for click-to-comment."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        assert 'class="line-content" data-line="1"' in resp.text
+
 
 class TestCommentFlow:
     def test_add_comment_redirects(self, client, source_dir):

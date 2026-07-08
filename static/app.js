@@ -14,6 +14,16 @@
     var formTpl = document.getElementById("comment-form-tpl");
     var isMobile = window.matchMedia("(max-width: 768px)").matches;
 
+    /* ── File navigator toggle (mobile) ── */
+
+    var navToggle = document.getElementById("nav-toggle");
+    var fileNav = document.getElementById("file-nav");
+    if (navToggle && fileNav) {
+        navToggle.addEventListener("click", function () {
+            fileNav.classList.toggle("open");
+        });
+    }
+
     /* ── Build comment HTML ── */
 
     function escapeHtml(s) {
@@ -110,7 +120,7 @@
         if (cancelBtn) {
             cancelBtn.addEventListener("click", function () {
                 sidebar.innerHTML =
-                    '<p class="sidebar-hint">Click a line number to add a comment.</p>';
+                    '<p class="sidebar-hint">Click a line to add a comment.</p>';
             });
         }
 
@@ -199,14 +209,17 @@
         }
     }
 
-    /* ── Event delegation for line numbers and markers ── */
+    /* ── Event delegation for line numbers, line content, and markers ── */
 
     document.addEventListener("click", function (e) {
         var lineEl = e.target.closest(".line-num");
+        var contentEl = e.target.closest(".line-content");
         var markerEl = e.target.closest(".marker-btn");
 
         var lineNum = null;
         if (lineEl) lineNum = parseInt(lineEl.getAttribute("data-line"), 10);
+        else if (contentEl)
+            lineNum = parseInt(contentEl.getAttribute("data-line"), 10);
         else if (markerEl)
             lineNum = parseInt(markerEl.getAttribute("data-line"), 10);
 
