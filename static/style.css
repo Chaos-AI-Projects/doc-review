@@ -207,6 +207,37 @@ main { padding: 1rem; }
     cursor: pointer;
 }
 
+/* ── List indent inside source lines ── */
+.line-content ul,
+.line-content ol {
+    padding-left: 1.5em;
+    margin: 0;
+}
+
+.line-content li {
+    list-style-position: outside;
+}
+
+/* ── Fenced code blocks (per-line <code>) ── */
+.line-content code {
+    background: #f3f4f6;
+    padding: .1em .3em;
+    border-radius: 3px;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: .9em;
+}
+
+/* ── Mermaid diagram containers ── */
+.line-content .mermaid {
+    background: #fff;
+    padding: .25em 0;
+}
+
+.line-content .mermaid svg {
+    max-width: 100%;
+    height: auto;
+}
+
 .line-marker {
     width: 2em;
     text-align: center;
