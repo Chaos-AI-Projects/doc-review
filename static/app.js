@@ -24,6 +24,28 @@
         });
     }
 
+    /* ── Column hide/show toggles ── */
+
+    var navColToggle = document.getElementById("nav-col-toggle");
+    var commentsColToggle = document.getElementById("comments-col-toggle");
+    var commentSidebar = document.getElementById("sidebar");
+
+    if (navColToggle && fileNav) {
+        navColToggle.classList.add("active");
+        navColToggle.addEventListener("click", function () {
+            fileNav.classList.toggle("col-hidden");
+            navColToggle.classList.toggle("active");
+        });
+    }
+
+    if (commentsColToggle && commentSidebar) {
+        commentsColToggle.classList.add("active");
+        commentsColToggle.addEventListener("click", function () {
+            commentSidebar.classList.toggle("col-hidden");
+            commentsColToggle.classList.toggle("active");
+        });
+    }
+
     /* ── File navigator: directory tree + filter ── */
 
     var allFiles = JSON.parse(

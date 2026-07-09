@@ -232,3 +232,71 @@ class TestCommentFlow:
         resp = client.get("/view?path=test.md")
         assert resp.status_code == 200
         assert 'name="author"' not in resp.text
+
+
+class TestLineNumbersHidden:
+    """Line numbers should be hidden via CSS (display: none)."""
+
+    def test_line_num_hidden_in_css(self, client):
+        """The line-num class must have display: none in the stylesheet."""
+        resp = client.get("/static/style.css")
+        assert resp.status_code == 200
+        assert "display: none" in resp.text or "display:none" in resp.text
+
+    def test_line_anchoring_preserved(self, client):
+        """Line anchoring (id=L1) and data-line must still work even with hidden numbers."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        assert 'id="L1"' in resp.text
+        assert 'data-line="1"' in resp.text
+
+
+class TestSidebarInline:
+    """The comment sidebar must be inline (not floating/fixed)."""
+
+    def test_sidebar_not_fixed_position(self, client):
+        """The comment-sidebar CSS must NOT use position: fixed."""
+        resp = client.get("/static/style.css")
+        assert resp.status_code == 200
+        # Sidebar should not be floating/fixed
+        css = resp.text
+        # Find the .comment-sidebar rule and verify it doesn't have position: fixed
+        import re
+        sidebar_match = re.search(r'\.comment-sidebar\s*\{([^}]+)\}', css)
+        assert sidebar_match, "Expected .comment-sidebar rule in CSS"
+        sidebar_css = sidebar_match.group(1)
+        assert "position: fixed" not in sidebar_css, "Sidebar must not use position: fixed"
+        assert "position:fixed" not in sidebar_css, "Sidebar must not use position: fixed"
+
+    def test_review_container_no_margin_right_reservation(self, client):
+        """Review container should not reserve margin-right for a floating sidebar."""
+        resp = client.get("/static/style.css")
+        css = resp.text
+        import re
+        container_match = re.search(r'\.review-container\s*\{([^}]+)\}', css)
+        assert container_match, "Expected .review-container rule in CSS"
+        container_css = container_match.group(1)
+        assert "margin-right" not in container_css, \
+            "Review container should not reserve right margin for floating sidebar"
+
+
+class TestColumnToggles:
+    """Navigator and comment columns should have independent hide/show toggles."""
+
+    def test_nav_toggle_button_exists(self, client):
+        """A toggle button to hide/show the navigator column must exist."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        assert 'id="nav-col-toggle"' in resp.text
+
+    def test_comments_toggle_button_exists(self, client):
+        """A toggle button to hide/show the comments column must exist."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        assert 'id="comments-col-toggle"' in resp.text
+
+    def test_toggle_buttons_in_toolbar(self, client):
+        """The toggle buttons should be in a toolbar area."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        assert 'class="col-toggles"' in resp.text
