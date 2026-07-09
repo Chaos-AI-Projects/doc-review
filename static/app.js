@@ -24,6 +24,105 @@
         });
     }
 
+    /* ── File navigator: directory tree + filter ── */
+
+    var allFiles = JSON.parse(
+        document.getElementById("files-data").textContent
+    );
+    var currentPath = JSON.parse(
+        document.getElementById("current-path-data").textContent
+    );
+    var navTreeEl = document.getElementById("file-nav-tree");
+    var navFilterEl = document.getElementById("nav-filter");
+
+    function buildTree(files) {
+        var root = {};
+        for (var i = 0; i < files.length; i++) {
+            var parts = files[i].split("/");
+            var node = root;
+            for (var j = 0; j < parts.length; j++) {
+                if (j === parts.length - 1) {
+                    if (!node._files) node._files = [];
+                    node._files.push({ name: parts[j], path: files[i] });
+                } else {
+                    if (!node[parts[j]]) node[parts[j]] = {};
+                    node = node[parts[j]];
+                }
+            }
+        }
+        return root;
+    }
+
+    function renderTree(node, container) {
+        // Render directories first, then files
+        var dirs = [];
+        var key;
+        for (key in node) {
+            if (key !== "_files" && node.hasOwnProperty(key)) {
+                dirs.push(key);
+            }
+        }
+        dirs.sort();
+        for (var d = 0; d < dirs.length; d++) {
+            var dirName = dirs[d];
+            var details = document.createElement("details");
+            details.className = "nav-dir";
+            details.open = true;
+            var summary = document.createElement("summary");
+            summary.className = "nav-dir-name";
+            summary.textContent = dirName + "/";
+            details.appendChild(summary);
+            var inner = document.createElement("div");
+            inner.className = "nav-dir-children";
+            renderTree(node[dirName], inner);
+            details.appendChild(inner);
+            container.appendChild(details);
+        }
+        // Files
+        var files = node._files || [];
+        for (var f = 0; f < files.length; f++) {
+            var a = document.createElement("a");
+            a.href = "/view?path=" + encodeURIComponent(files[f].path);
+            a.className = "file-nav-link";
+            if (files[f].path === currentPath) a.className += " active";
+            a.textContent = files[f].name;
+            a.setAttribute("data-path", files[f].path);
+            container.appendChild(a);
+        }
+    }
+
+    function renderFilteredFlat(files) {
+        for (var i = 0; i < files.length; i++) {
+            var a = document.createElement("a");
+            a.href = "/view?path=" + encodeURIComponent(files[i]);
+            a.className = "file-nav-link";
+            if (files[i] === currentPath) a.className += " active";
+            a.textContent = files[i];
+            a.setAttribute("data-path", files[i]);
+            navTreeEl.appendChild(a);
+        }
+    }
+
+    // Initial render: tree view
+    var tree = buildTree(allFiles);
+    renderTree(tree, navTreeEl);
+
+    // Filter
+    if (navFilterEl) {
+        navFilterEl.addEventListener("input", function () {
+            var q = navFilterEl.value.toLowerCase();
+            navTreeEl.innerHTML = "";
+            if (q === "") {
+                renderTree(buildTree(allFiles), navTreeEl);
+            } else {
+                var filtered = allFiles.filter(function (f) {
+                    return f.toLowerCase().indexOf(q) !== -1;
+                });
+                renderFilteredFlat(filtered);
+            }
+        });
+    }
+
     /* ── Build comment HTML ── */
 
     function escapeHtml(s) {

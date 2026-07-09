@@ -138,7 +138,7 @@ async def add_comment(
     path: str = Form(...),
     line_start: int = Form(...),
     line_end: int = Form(...),
-    author: str = Form(...),
+    author: str = Form("anon"),
     body: str = Form(...),
     parent_id: int | None = Form(None),
 ):

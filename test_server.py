@@ -60,7 +60,8 @@ class TestViewFile:
         resp = client.get("/view?path=../../../etc/passwd")
         assert resp.status_code in (403, 404)
 
-    def test_view_contains_line_numbers(self, client):
+    def test_view_contains_line_anchors(self, client):
+        """Line rows still have id and data-line attributes for anchoring."""
         resp = client.get("/view?path=test.md")
         assert 'id="L1"' in resp.text
         assert 'data-line="1"' in resp.text
@@ -74,12 +75,12 @@ class TestViewFile:
         assert "test.md" in resp.text
         assert "sub/nested.md" in resp.text
 
-    def test_file_navigator_highlights_current_file(self, client):
-        """Current file has the 'active' marker in the file navigator."""
+    def test_file_navigator_provides_current_path(self, client):
+        """View page includes current path data for JS to highlight active file."""
         resp = client.get("/view?path=test.md")
         assert resp.status_code == 200
-        # The current file link should have an active/current class
-        assert 'class="file-nav-link active"' in resp.text
+        assert '"test.md"' in resp.text
+        assert 'id="current-path-data"' in resp.text
 
     def test_file_navigator_present_for_nested_file(self, client):
         """File navigator works when viewing a nested file."""
@@ -193,3 +194,41 @@ class TestCommentFlow:
             follow_redirects=False,
         )
         assert resp.status_code == 303
+
+    def test_add_comment_without_author(self, client, source_dir):
+        """Posting a comment without an author field should succeed with a default."""
+        from file_id import derive_file_id
+
+        file_path = str(Path(source_dir) / "test.md")
+        fid = derive_file_id(file_path)
+
+        resp = client.post(
+            "/comment",
+            data={
+                "file_id": fid,
+                "path": "test.md",
+                "line_start": "1",
+                "line_end": "1",
+                "body": "No author comment",
+                "parent_id": "0",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        # Verify the comment was stored with a default author
+        from db import get_connection, list_comments
+
+        db_path = Path(source_dir) / "test_comments.db"
+        conn = get_connection(db_path)
+        comments = list_comments(conn, fid)
+        conn.close()
+        matching = [c for c in comments if c["body"] == "No author comment"]
+        assert len(matching) == 1
+        assert matching[0]["author"] == "anon"
+
+    def test_view_no_author_field_in_comment_form(self, client):
+        """The comment form template should not contain an author input."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        assert 'name="author"' not in resp.text
