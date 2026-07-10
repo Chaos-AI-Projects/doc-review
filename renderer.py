@@ -21,7 +21,9 @@ _ALLOWED_TAGS = frozenset({
 _ALLOWED_ATTRS = {
     "a": {"href", "title"},
     "abbr": {"title"},
+    "code": {"class"},
     "div": {"class"},
+    "pre": {"class"},
     "td": {"align"},
     "th": {"align"},
 }
@@ -107,51 +109,56 @@ def render_markdown_lines(source: str) -> list[dict]:
     - ``html`` is the line rendered as sanitized inline HTML. Dangerous tags
       (script, iframe, etc.) and event-handler attributes are stripped.
 
-    Multi-line fenced code blocks (``` or ~~~) are detected across lines and
-    rendered with ``<code>`` styling while preserving the per-line anchor model.
+    Multi-line fenced code blocks (``` or ~~~) are rendered through the
+    markdown parser as a single ``<pre><code>`` block attached to the opening
+    fence line.  Interior and closing fence lines emit empty ``html`` while
+    still retaining their per-line anchor entries for comment attachment.
+
+    Mermaid blocks are rendered as a single ``<div class="mermaid">`` container
+    on the opening fence line.
     """
     lines = source.split("\n")
     fence_regions = _detect_fence_regions(lines)
 
-    # Build a lookup: line index -> (region_role, lang)
-    # role: "open", "code", "close"
-    fence_map: dict[int, tuple[str, str]] = {}
+    # Pre-render each fenced region as a single block.
+    # fence_block_html: opening-fence index -> rendered HTML for the block.
+    # fence_interior: set of indices whose html should be empty.
+    fence_block_html: dict[int, str] = {}
+    fence_interior: set[int] = set()
+
     for start, end, lang in fence_regions:
-        fence_map[start] = ("open", lang)
-        for ci in range(start + 1, end):
-            fence_map[ci] = ("code", lang)
-        fence_map[end] = ("close", lang)
+        content_lines = lines[start + 1 : end]
+        if lang == "mermaid":
+            # Mermaid: single container div with all content lines joined.
+            content = "\n".join(content_lines)
+            fence_block_html[start] = (
+                f'<div class="mermaid">{html_mod.escape(content)}</div>'
+            )
+        else:
+            # Code: reconstruct the fenced block and pass through the
+            # markdown parser to get a proper <pre><code> element.
+            block_lines = [lines[start]] + content_lines + [lines[end]]
+            block_text = "\n".join(block_lines)
+            rendered = md.markdown(block_text, extensions=["fenced_code"])
+            fence_block_html[start] = _sanitize_html(rendered)
+
+        # Interior content lines and closing fence line are empty.
+        for ci in range(start + 1, end + 1):
+            fence_interior.add(ci)
 
     result = []
     for i, line in enumerate(lines):
         raw = line
-        info = fence_map.get(i)
-        if info is not None:
-            role, lang = info
-            is_mermaid = lang == "mermaid"
-            if role == "open":
-                # Opening fence: show language label if present, no backticks.
-                if is_mermaid:
-                    html = '<code class="language-mermaid">mermaid</code>'
-                elif lang:
-                    html = f'<code class="language-{html_mod.escape(lang)}">{html_mod.escape(lang)}</code>'
-                else:
-                    html = ""
-            elif role == "close":
-                # Closing fence: render empty.
-                html = ""
-            elif is_mermaid:
-                # Mermaid content: wrap in a div.mermaid for client-side rendering.
-                html = f'<div class="mermaid">{html_mod.escape(line)}</div>'
-            else:
-                # Code line: escape and wrap in <code>.
-                html = f"<code>{html_mod.escape(line)}</code>"
+        if i in fence_block_html:
+            rendered_html = fence_block_html[i]
+        elif i in fence_interior:
+            rendered_html = ""
         else:
             # Normal line: render inline markdown.
-            html = md.markdown(line, extensions=["fenced_code", "tables"])
+            rendered_html = md.markdown(line, extensions=["fenced_code", "tables"])
             # md.markdown wraps in <p>...</p>; unwrap for inline display.
-            if html.startswith("<p>") and html.endswith("</p>"):
-                html = html[3:-4]
-            html = _sanitize_html(html)
-        result.append({"number": i + 1, "raw": raw, "html": html})
+            if rendered_html.startswith("<p>") and rendered_html.endswith("</p>"):
+                rendered_html = rendered_html[3:-4]
+            rendered_html = _sanitize_html(rendered_html)
+        result.append({"number": i + 1, "raw": raw, "html": rendered_html})
     return result
