@@ -1,14 +1,17 @@
-"""Render markdown source files to HTML with per-line anchors."""
+"""Render markdown source to HTML with per-block anchors.
+
+Uses markdown-it-py to parse the whole document as block tokens.
+Each block token carries ``token.map = [startLine, endLine]`` (0-based,
+end-exclusive) giving its source line range.  Blocks are rendered to HTML
+and returned with their source line ranges for comment anchoring.
+"""
 
 import html as html_mod
 import re
 
-import markdown as md
+from markdown_it import MarkdownIt
 
-# Regex to detect a fenced code block opening/closing line.
-_FENCE_RE = re.compile(r"^(`{3,}|~{3,})(\w*)\s*$")
-
-# Allowed HTML tags for sanitized markdown output.
+# Allowed HTML tags for sanitized output (defense-in-depth).
 _ALLOWED_TAGS = frozenset({
     "a", "abbr", "b", "blockquote", "br", "code", "dd", "del", "div", "dl",
     "dt", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "ins", "kbd",
@@ -68,97 +71,108 @@ def _sanitize_html(html: str) -> str:
     return _TAG_RE.sub(_replace_tag, html)
 
 
-def _detect_fence_regions(lines: list[str]) -> list[tuple[int, int, str]]:
-    """Return (start, end, lang) tuples for fenced code blocks in *lines*.
-
-    *start* and *end* are 0-based indices (inclusive). *lang* is the language
-    hint from the opening fence (empty string if none).
-    """
-    regions: list[tuple[int, int, str]] = []
-    fence_char = None
-    fence_len = 0
-    start = -1
-    lang = ""
-    for idx, line in enumerate(lines):
-        m = _FENCE_RE.match(line)
-        if m and fence_char is None:
-            # Opening fence.
-            fence_char = m.group(1)[0]
-            fence_len = len(m.group(1))
-            lang = m.group(2)
-            start = idx
-        elif fence_char is not None and m:
-            closing_char = m.group(1)[0]
-            closing_len = len(m.group(1))
-            if closing_char == fence_char and closing_len >= fence_len and not m.group(2):
-                # Closing fence.
-                regions.append((start, idx, lang))
-                fence_char = None
-                fence_len = 0
-                start = -1
-                lang = ""
-    return regions
+def _new_parser() -> MarkdownIt:
+    """Create a MarkdownIt parser with our standard settings."""
+    return MarkdownIt("commonmark", {"html": False}).enable("table")
 
 
-def render_markdown_lines(source: str) -> list[dict]:
-    """Split *source* into lines and return per-line data.
+def render_markdown_blocks(source: str) -> list[dict]:
+    """Parse *source* as markdown and return per-block data.
 
-    Each entry: {"number": int, "raw": str, "html": str}
-    - ``number`` is 1-based.
-    - ``raw`` is the original line text.
-    - ``html`` is the line rendered as sanitized inline HTML. Dangerous tags
-      (script, iframe, etc.) and event-handler attributes are stripped.
+    Each entry: ``{"start_line": int, "end_line": int, "raw": str, "html": str}``
 
-    Multi-line fenced code blocks (``` or ~~~) are rendered through the
-    markdown parser as a single ``<pre><code>`` block attached to the opening
-    fence line.  Interior and closing fence lines emit empty ``html`` while
-    still retaining their per-line anchor entries for comment attachment.
+    - ``start_line`` and ``end_line`` are 1-based inclusive.
+    - ``raw`` is the original source text for the block's lines.
+    - ``html`` is the block rendered as sanitized HTML.
 
-    Mermaid blocks are rendered as a single ``<div class="mermaid">`` container
-    on the opening fence line.
+    Mermaid fenced blocks are rendered as ``<div class="mermaid">`` containers.
     """
     lines = source.split("\n")
-    fence_regions = _detect_fence_regions(lines)
+    md = _new_parser()
+    tokens = md.parse(source)
 
-    # Pre-render each fenced region as a single block.
-    # fence_block_html: opening-fence index -> rendered HTML for the block.
-    # fence_interior: set of indices whose html should be empty.
-    fence_block_html: dict[int, str] = {}
-    fence_interior: set[int] = set()
+    if not tokens:
+        # Empty source — return a single empty block.
+        return [{"start_line": 1, "end_line": 1, "raw": "", "html": ""}]
 
-    for start, end, lang in fence_regions:
-        content_lines = lines[start + 1 : end]
-        if lang == "mermaid":
-            # Mermaid: single container div with all content lines joined.
-            content = "\n".join(content_lines)
-            fence_block_html[start] = (
-                f'<div class="mermaid">{html_mod.escape(content)}</div>'
-            )
+    # Walk the flat token list to identify top-level blocks.
+    blocks: list[dict] = []
+    i = 0
+    depth = 0
+    block_start_idx: int | None = None
+
+    while i < len(tokens):
+        t = tokens[i]
+        if depth == 0:
+            if t.nesting == 0 and t.map is not None:
+                # Self-closing top-level block (fence, hr, code_block).
+                blocks.append(
+                    _render_block(tokens[i : i + 1], t.map, lines, md)
+                )
+            elif t.nesting == 1 and t.map is not None:
+                # Opening of a top-level block.
+                block_start_idx = i
+                depth = 1
+            # nesting == -1 at depth 0 should not happen.
         else:
-            # Code: reconstruct the fenced block and pass through the
-            # markdown parser to get a proper <pre><code> element.
-            block_lines = [lines[start]] + content_lines + [lines[end]]
-            block_text = "\n".join(block_lines)
-            rendered = md.markdown(block_text, extensions=["fenced_code"])
-            fence_block_html[start] = _sanitize_html(rendered)
+            depth += t.nesting
+            if depth == 0:
+                assert block_start_idx is not None
+                bmap = tokens[block_start_idx].map
+                blocks.append(
+                    _render_block(
+                        tokens[block_start_idx : i + 1], bmap, lines, md
+                    )
+                )
+                block_start_idx = None
+        i += 1
 
-        # Interior content lines and closing fence line are empty.
-        for ci in range(start + 1, end + 1):
-            fence_interior.add(ci)
+    return blocks if blocks else [{"start_line": 1, "end_line": 1, "raw": "", "html": ""}]
 
-    result = []
-    for i, line in enumerate(lines):
-        raw = line
-        if i in fence_block_html:
-            rendered_html = fence_block_html[i]
-        elif i in fence_interior:
-            rendered_html = ""
-        else:
-            # Normal line: render inline markdown.
-            rendered_html = md.markdown(line, extensions=["fenced_code", "tables"])
-            # md.markdown wraps in <p>...</p>; unwrap for inline display.
-            if rendered_html.startswith("<p>") and rendered_html.endswith("</p>"):
-                rendered_html = rendered_html[3:-4]
-            rendered_html = _sanitize_html(rendered_html)
-        result.append({"number": i + 1, "raw": raw, "html": rendered_html})
-    return result
+
+def _render_block(
+    block_tokens: list, line_map: list[int], source_lines: list[str], md: MarkdownIt
+) -> dict:
+    start_0, end_0 = line_map  # 0-based, end-exclusive
+    start_1 = start_0 + 1  # 1-based inclusive
+    end_1 = end_0  # end_0 exclusive → end_0 is 1-based inclusive
+    raw = "\n".join(source_lines[start_0:end_0])
+
+    # Special-case mermaid fenced blocks.
+    if (
+        len(block_tokens) == 1
+        and block_tokens[0].type == "fence"
+        and block_tokens[0].info.strip() == "mermaid"
+    ):
+        content = block_tokens[0].content.rstrip("\n")
+        rendered = f'<div class="mermaid">{html_mod.escape(content)}</div>'
+    else:
+        rendered = md.renderer.render(block_tokens, md.options, {})
+        rendered = _sanitize_html(rendered)
+
+    return {
+        "start_line": start_1,
+        "end_line": end_1,
+        "raw": raw,
+        "html": rendered.strip(),
+    }
+
+
+def extract_toc(source: str) -> list[dict]:
+    """Extract a table of contents from heading tokens.
+
+    Returns a list of ``{"level": int, "text": str, "start_line": int}``.
+    """
+    md = _new_parser()
+    tokens = md.parse(source)
+    toc: list[dict] = []
+    for i, t in enumerate(tokens):
+        if t.type == "heading_open" and t.map is not None:
+            level = int(t.tag[1])  # "h1" → 1, "h2" → 2, etc.
+            # The next token is the inline content with the heading text.
+            if i + 1 < len(tokens) and tokens[i + 1].type == "inline":
+                text = tokens[i + 1].content
+                toc.append(
+                    {"level": level, "text": text, "start_line": t.map[0] + 1}
+                )
+    return toc

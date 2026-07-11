@@ -20,7 +20,7 @@ from markupsafe import Markup
 
 from db import create_comment, get_connection, get_replies, init_db, list_comments, resolve_comment, unresolve_comment
 from file_id import derive_file_id
-from renderer import render_markdown_lines
+from renderer import extract_toc, render_markdown_blocks
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -96,17 +96,25 @@ async def view_file(request: Request, path: str = Query(...)):
     """Render a file with per-line anchors and comments."""
     file_path = _resolve_file(path)
     source = file_path.read_text(encoding="utf-8", errors="replace")
-    lines = render_markdown_lines(source)
+    blocks = render_markdown_blocks(source)
+    toc = extract_toc(source)
     fid = derive_file_id(str(file_path))
 
     conn = _conn()
     try:
         comments = list_comments(conn, fid)
 
-        # Group comments by line_start for sidebar display.
-        comments_by_line: dict[int, list[dict]] = {}
+        # Map each source line to its containing block's start_line.
+        line_to_block_start: dict[int, int] = {}
+        for block in blocks:
+            for ln in range(block["start_line"], block["end_line"] + 1):
+                line_to_block_start[ln] = block["start_line"]
+
+        # Group comments by their containing block's start_line.
+        comments_by_block: dict[int, list[dict]] = {}
         for c in comments:
-            comments_by_line.setdefault(c["line_start"], []).append(c)
+            block_start = line_to_block_start.get(c["line_start"], c["line_start"])
+            comments_by_block.setdefault(block_start, []).append(c)
 
         # Build reply map
         reply_map: dict[int, list[dict]] = {}
@@ -124,8 +132,9 @@ async def view_file(request: Request, path: str = Query(...)):
         context={
             "path": path,
             "file_id": fid,
-            "lines": lines,
-            "comments_by_line": comments_by_line,
+            "blocks": blocks,
+            "toc": toc,
+            "comments_by_block": comments_by_block,
             "reply_map": reply_map,
             "files": all_files,
         },

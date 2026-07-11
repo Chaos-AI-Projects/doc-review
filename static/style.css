@@ -172,6 +172,52 @@ main { padding: 1rem; }
     padding-left: .75rem;
 }
 
+/* ── Table of contents ── */
+.toc-section {
+    border-top: 1px solid var(--border);
+    margin-top: .5rem;
+    padding-top: .5rem;
+}
+
+.toc-heading {
+    padding: .2rem .5rem;
+    font-size: .8rem;
+    font-weight: 600;
+    color: #555;
+}
+
+.toc-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.toc-item {
+    padding: 0;
+}
+
+.toc-link {
+    display: block;
+    padding: .15rem .75rem;
+    color: var(--fg);
+    text-decoration: none;
+    font-size: .8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.toc-link:hover {
+    background: var(--line-hover);
+    color: var(--accent);
+}
+
+.toc-level-2 .toc-link { padding-left: 1.5rem; }
+.toc-level-3 .toc-link { padding-left: 2.25rem; }
+.toc-level-4 .toc-link { padding-left: 3rem; }
+.toc-level-5 .toc-link { padding-left: 3.75rem; }
+.toc-level-6 .toc-link { padding-left: 4.5rem; }
+
 /* ── Review container (source + sidebar) ── */
 .review-container {
     display: flex;

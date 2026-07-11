@@ -1,4 +1,4 @@
-/* doc-review — minimal JS for comment interaction */
+/* doc-review — minimal JS for comment interaction (block-anchored) */
 
 (function () {
     "use strict";
@@ -76,7 +76,6 @@
     }
 
     function renderTree(node, container) {
-        // Render directories first, then files
         var dirs = [];
         var key;
         for (key in node) {
@@ -100,7 +99,6 @@
             details.appendChild(inner);
             container.appendChild(details);
         }
-        // Files
         var files = node._files || [];
         for (var f = 0; f < files.length; f++) {
             var a = document.createElement("a");
@@ -125,11 +123,9 @@
         }
     }
 
-    // Initial render: tree view
     var tree = buildTree(allFiles);
     renderTree(tree, navTreeEl);
 
-    // Filter
     if (navFilterEl) {
         navFilterEl.addEventListener("input", function () {
             var q = navFilterEl.value.toLowerCase();
@@ -192,13 +188,14 @@
             html +=
                 '<button class="action-link reply-btn" data-comment-id="' +
                 c.id +
-                '" data-line="' +
+                '" data-line-start="' +
                 c.line_start +
+                '" data-line-end="' +
+                c.line_end +
                 '">Reply</button>';
         }
         html += "</div>";
 
-        // replies
         var replies = repliesData[String(c.id)] || [];
         if (replies.length > 0) {
             html += '<div class="reply-thread">';
@@ -216,69 +213,67 @@
         return new URLSearchParams(window.location.search).get("path") || "";
     }
 
-    /* ── Show comments for a line in the sidebar ── */
+    /* ── Show comments for a block in the sidebar ── */
 
-    function showLineComments(lineNum) {
-        var comments = commentsData[String(lineNum)] || [];
-        var html = "<h3>Line " + lineNum + "</h3>";
+    function showBlockComments(startLine, endLine) {
+        var comments = commentsData[String(startLine)] || [];
+        var label = startLine === endLine
+            ? "Line " + startLine
+            : "Lines " + startLine + "-" + endLine;
+        var html = "<h3>" + label + "</h3>";
         for (var i = 0; i < comments.length; i++) {
             html += commentCardHtml(comments[i], 0);
         }
 
-        // New comment form
         var frag = formTpl.content.cloneNode(true);
         var form = frag.querySelector("form");
-        form.querySelector('[name="line_start"]').value = lineNum;
-        form.querySelector('[name="line_end"]').value = lineNum;
+        form.querySelector('[name="line_start"]').value = startLine;
+        form.querySelector('[name="line_end"]').value = endLine;
         var tmp = document.createElement("div");
         tmp.appendChild(frag);
         html += tmp.innerHTML;
 
         sidebar.innerHTML = html;
 
-        // Wire cancel
         var cancelBtn = sidebar.querySelector(".cancel-btn");
         if (cancelBtn) {
             cancelBtn.addEventListener("click", function () {
                 sidebar.innerHTML =
-                    '<p class="sidebar-hint">Click a line to add a comment.</p>';
+                    '<p class="sidebar-hint">Click a block to add a comment.</p>';
             });
         }
 
-        // Wire reply buttons
         var replyBtns = sidebar.querySelectorAll(".reply-btn");
         for (var j = 0; j < replyBtns.length; j++) {
             replyBtns[j].addEventListener("click", handleReply);
         }
 
-        // Highlight active line
         document.querySelectorAll(".source-line.active").forEach(function (el) {
             el.classList.remove("active");
         });
-        var row = document.getElementById("L" + lineNum);
+        var row = document.getElementById("L" + startLine);
         if (row) row.classList.add("active");
     }
 
-    /* ── Mobile: toggle inline comment panel under the line ── */
+    /* ── Mobile: toggle inline comment panel under the block ── */
 
-    function showLineCommentsMobile(lineNum) {
-        // Remove existing inline panels
+    function showBlockCommentsMobile(startLine, endLine) {
         document.querySelectorAll(".inline-comments").forEach(function (el) {
             el.remove();
         });
 
-        var row = document.getElementById("L" + lineNum);
+        var row = document.getElementById("L" + startLine);
         if (!row) return;
 
-        var comments = commentsData[String(lineNum)] || [];
+        var comments = commentsData[String(startLine)] || [];
         var html = "";
         for (var i = 0; i < comments.length; i++) {
             html += commentCardHtml(comments[i], 0);
         }
         var frag = formTpl.content.cloneNode(true);
         var form = frag.querySelector("form");
-        form.querySelector('[name="line_start"]').value = lineNum;
-        form.querySelector('[name="line_end"]').value = lineNum;
+        form.querySelector('[name="line_start"]').value = startLine;
+        form.querySelector('[name="line_end"]').value = endLine;
         var tmp = document.createElement("div");
         tmp.appendChild(frag);
         html += tmp.innerHTML;
@@ -307,17 +302,17 @@
     function handleReply(e) {
         var btn = e.currentTarget;
         var commentId = btn.getAttribute("data-comment-id");
-        var lineNum = btn.getAttribute("data-line");
+        var startLine = btn.getAttribute("data-line-start");
+        var endLine = btn.getAttribute("data-line-end");
         var card = btn.closest(".comment-card");
         if (!card) return;
 
-        // Don't add duplicate forms
         if (card.querySelector(".comment-form")) return;
 
         var frag = formTpl.content.cloneNode(true);
         var form = frag.querySelector("form");
-        form.querySelector('[name="line_start"]').value = lineNum;
-        form.querySelector('[name="line_end"]').value = lineNum;
+        form.querySelector('[name="line_start"]').value = startLine;
+        form.querySelector('[name="line_end"]').value = endLine;
         form.querySelector('[name="parent_id"]').value = commentId;
         card.appendChild(frag);
 
@@ -330,25 +325,26 @@
         }
     }
 
-    /* ── Event delegation for line numbers, line content, and markers ── */
+    /* ── Event delegation for block content and markers ── */
 
     document.addEventListener("click", function (e) {
-        var lineEl = e.target.closest(".line-num");
         var contentEl = e.target.closest(".line-content");
         var markerEl = e.target.closest(".marker-btn");
+        var lineNumEl = e.target.closest(".line-num");
 
-        var lineNum = null;
-        if (lineEl) lineNum = parseInt(lineEl.getAttribute("data-line"), 10);
-        else if (contentEl)
-            lineNum = parseInt(contentEl.getAttribute("data-line"), 10);
-        else if (markerEl)
-            lineNum = parseInt(markerEl.getAttribute("data-line"), 10);
+        var startLine = null;
+        var endLine = null;
+        var el = contentEl || markerEl || lineNumEl;
+        if (el) {
+            startLine = parseInt(el.getAttribute("data-line-start"), 10);
+            endLine = parseInt(el.getAttribute("data-line-end"), 10);
+        }
 
-        if (lineNum) {
+        if (startLine && endLine) {
             if (isMobile) {
-                showLineCommentsMobile(lineNum);
+                showBlockCommentsMobile(startLine, endLine);
             } else {
-                showLineComments(lineNum);
+                showBlockComments(startLine, endLine);
             }
         }
     });

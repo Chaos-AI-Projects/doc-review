@@ -16,6 +16,18 @@
     <nav class="file-nav" id="file-nav">
         <input type="text" class="file-nav-filter" id="nav-filter" placeholder="Filter files…" autocomplete="off">
         <div class="file-nav-tree" id="file-nav-tree"></div>
+        {% if toc %}
+        <div class="toc-section">
+            <div class="toc-heading">Contents</div>
+            <ul class="toc-list">
+            {% for entry in toc %}
+                <li class="toc-item toc-level-{{ entry.level }}">
+                    <a href="#L{{ entry.start_line }}" class="toc-link">{{ entry.text }}</a>
+                </li>
+            {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
     </nav>
     <script id="files-data" type="application/json">
     {{ files | safe_tojson }}
@@ -25,17 +37,17 @@
     </script>
 
     <div class="review-container">
-        <!-- Source lines -->
+        <!-- Source blocks -->
         <table class="source-lines" id="source">
             <tbody>
-            {% for line in lines %}
-            <tr id="L{{ line.number }}" class="source-line{% if line.number in comments_by_line %} has-comments{% endif %}">
-                <td class="line-num" data-line="{{ line.number }}">{{ line.number }}</td>
-                <td class="line-content" data-line="{{ line.number }}">{{ line.html | safe }}</td>
+            {% for block in blocks %}
+            <tr id="L{{ block.start_line }}" class="source-line{% if block.start_line in comments_by_block %} has-comments{% endif %}" data-line-start="{{ block.start_line }}" data-line-end="{{ block.end_line }}">
+                <td class="line-num" data-line-start="{{ block.start_line }}" data-line-end="{{ block.end_line }}">{{ block.start_line }}{% if block.end_line != block.start_line %}-{{ block.end_line }}{% endif %}</td>
+                <td class="line-content" data-line-start="{{ block.start_line }}" data-line-end="{{ block.end_line }}">{{ block.html | safe }}</td>
                 <td class="line-marker">
-                    {% if line.number in comments_by_line %}
-                    <button class="marker-btn" data-line="{{ line.number }}" title="{{ comments_by_line[line.number] | length }} comment(s)">
-                        {{ comments_by_line[line.number] | length }}
+                    {% if block.start_line in comments_by_block %}
+                    <button class="marker-btn" data-line-start="{{ block.start_line }}" data-line-end="{{ block.end_line }}" title="{{ comments_by_block[block.start_line] | length }} comment(s)">
+                        {{ comments_by_block[block.start_line] | length }}
                     </button>
                     {% endif %}
                 </td>
@@ -47,7 +59,7 @@
         <!-- Comment sidebar (desktop) / inline panel (mobile) -->
         <aside class="comment-sidebar" id="sidebar">
             <div id="sidebar-content">
-                <p class="sidebar-hint">Click a line to add a comment.</p>
+                <p class="sidebar-hint">Click a block to add a comment.</p>
             </div>
         </aside>
     </div>
@@ -71,7 +83,7 @@
 
 <!-- Pre-rendered comment data for JS -->
 <script id="comments-data" type="application/json">
-{{ comments_by_line | safe_tojson }}
+{{ comments_by_block | safe_tojson }}
 </script>
 <script id="replies-data" type="application/json">
 {{ reply_map | safe_tojson }}
@@ -85,8 +97,6 @@
 if (document.querySelector('.mermaid')) {
     const m = await import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs');
     m.default.initialize({ startOnLoad: false, theme: 'default' });
-    // Mermaid containers are split across per-line divs; collect consecutive
-    // .mermaid divs into combined diagram sources and render each group.
     const cells = document.querySelectorAll('td.line-content');
     let group = [];
     let groupCells = [];
@@ -98,7 +108,6 @@ if (document.querySelector('.mermaid')) {
         try {
             const { svg } = await m.default.render(id, src);
             container.innerHTML = svg;
-            // Hide the remaining cells' mermaid divs (content merged into first).
             for (let i = 1; i < groupCells.length; i++) {
                 const d = groupCells[i].querySelector('.mermaid');
                 if (d) d.style.display = 'none';
