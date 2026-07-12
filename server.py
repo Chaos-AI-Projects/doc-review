@@ -170,6 +170,7 @@ async def add_comment(
             author=author,
             body=body,
             parent_id=parent_id if parent_id and parent_id > 0 else None,
+            file_path=path,
         )
     finally:
         conn.close()

@@ -13,6 +13,7 @@ comments:
     resolved    INTEGER NOT NULL DEFAULT 0
     created_at  TEXT NOT NULL        -- ISO-8601
     updated_at  TEXT NOT NULL        -- ISO-8601
+    file_path   TEXT                 -- relative path at comment-creation time (nullable for legacy)
 """
 
 import sqlite3
@@ -31,10 +32,13 @@ CREATE TABLE IF NOT EXISTS comments (
     resolved    INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL,
+    file_path   TEXT,
     FOREIGN KEY (parent_id) REFERENCES comments(id)
 );
 CREATE INDEX IF NOT EXISTS idx_comments_file_lines
     ON comments (file_id, line_start, line_end);
+CREATE INDEX IF NOT EXISTS idx_comments_file_path
+    ON comments (file_path);
 """
 
 
@@ -51,7 +55,27 @@ def get_connection(db_path: str | Path = "comments.db") -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
-    conn.executescript(_SCHEMA)
+    # Check if the table already exists (for migration path)
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='comments'"
+    ).fetchone()
+
+    if not table_exists:
+        # Fresh DB — create with full schema including file_path
+        conn.executescript(_SCHEMA)
+    else:
+        # Existing table — migrate: add file_path column if missing
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(comments)").fetchall()}
+        if "file_path" not in cols:
+            conn.execute("ALTER TABLE comments ADD COLUMN file_path TEXT")
+        # Ensure all indexes exist
+        conn.executescript(
+            "CREATE INDEX IF NOT EXISTS idx_comments_file_lines"
+            "    ON comments (file_id, line_start, line_end);\n"
+            "CREATE INDEX IF NOT EXISTS idx_comments_file_path"
+            "    ON comments (file_path);\n"
+        )
+        conn.commit()
 
 
 def create_comment(
@@ -63,13 +87,14 @@ def create_comment(
     author: str,
     body: str,
     parent_id: int | None = None,
+    file_path: str | None = None,
 ) -> dict:
     now = _now_iso()
     cur = conn.execute(
         """INSERT INTO comments (file_id, line_start, line_end, author, body,
-                                 parent_id, resolved, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)""",
-        (file_id, line_start, line_end, author, body, parent_id, now, now),
+                                 parent_id, resolved, created_at, updated_at, file_path)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
+        (file_id, line_start, line_end, author, body, parent_id, now, now, file_path),
     )
     conn.commit()
     return dict(conn.execute("SELECT * FROM comments WHERE id=?", (cur.lastrowid,)).fetchone())
@@ -92,6 +117,21 @@ def list_comments(
     if line_end is not None:
         query += " AND line_start <= ?"
         params.append(line_end)
+    if not include_resolved:
+        query += " AND resolved = 0"
+    query += " ORDER BY line_start, created_at"
+    return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+
+def list_comments_by_path(
+    conn: sqlite3.Connection,
+    file_path: str,
+    *,
+    include_resolved: bool = True,
+) -> list[dict]:
+    """List comments for a file by its stored file_path (fast indexed query)."""
+    query = "SELECT * FROM comments WHERE file_path = ?"
+    params: list = [file_path]
     if not include_resolved:
         query += " AND resolved = 0"
     query += " ORDER BY line_start, created_at"

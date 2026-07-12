@@ -309,3 +309,109 @@ class TestJsonOutput:
                       "current_line_start", "current_line_end",
                       "original_commit", "file_id"):
             assert field in c, f"Missing field: {field}"
+
+
+class TestFilePathFastPath:
+    """Comments with file_path should be found via direct indexed query (fast path)."""
+
+    def test_fast_path_finds_comment_by_file_path(self, temp_repo, temp_db):
+        """collect_comments finds comments stored with file_path without full git walk."""
+        db_path, conn = temp_db
+        doc = temp_repo / "doc.md"
+        doc.write_text("line1\nline2\nline3\n")
+        _run_git(temp_repo, "add", "doc.md")
+        _run_git(temp_repo, "commit", "-m", "add doc")
+
+        blob = _blob_id(temp_repo, doc)
+        # Store comment with file_path set (simulating the new write path)
+        create_comment(conn, file_id=blob, line_start=2, line_end=2,
+                       author="alice", body="fast path comment",
+                       file_path="doc.md")
+
+        results = collect_comments(
+            file_path=str(doc), repo=str(temp_repo), db_path=str(db_path)
+        )
+        assert len(results) == 1
+        c = results[0]
+        assert c["body"] == "fast path comment"
+        assert c["current_line_start"] == 2
+        assert c["status"] != "removed"
+
+    def test_fast_path_with_line_translation(self, temp_repo, temp_db):
+        """Comments found via file_path from an older version still get line translation."""
+        db_path, conn = temp_db
+        doc = temp_repo / "doc.md"
+
+        # V1
+        doc.write_text("aaa\nbbb\nccc\n")
+        _run_git(temp_repo, "add", "doc.md")
+        _run_git(temp_repo, "commit", "-m", "v1")
+        v1_blob = _blob_id(temp_repo, doc)
+
+        # Comment on line 2 (bbb) with file_path stored
+        create_comment(conn, file_id=v1_blob, line_start=2, line_end=2,
+                       author="bob", body="comment on bbb",
+                       file_path="doc.md")
+
+        # V2: insert at top, pushing bbb to line 3
+        doc.write_text("xxx\naaa\nbbb\nccc\n")
+        _run_git(temp_repo, "add", "doc.md")
+        _run_git(temp_repo, "commit", "-m", "v2")
+
+        results = collect_comments(
+            file_path=str(doc), repo=str(temp_repo), db_path=str(db_path)
+        )
+        assert len(results) == 1
+        c = results[0]
+        assert c["current_line_start"] == 3
+        assert c["status"] != "removed"
+
+
+class TestFilePathNullFallback:
+    """Legacy rows with file_path=NULL should still be found via blob-enumeration walk."""
+
+    def test_null_file_path_falls_back_to_blob_walk(self, temp_repo, temp_db):
+        """Comments without file_path are still found via the existing blob-walk."""
+        db_path, conn = temp_db
+        doc = temp_repo / "doc.md"
+        doc.write_text("line1\nline2\nline3\n")
+        _run_git(temp_repo, "add", "doc.md")
+        _run_git(temp_repo, "commit", "-m", "add doc")
+
+        blob = _blob_id(temp_repo, doc)
+        # Create comment WITHOUT file_path (legacy behavior)
+        create_comment(conn, file_id=blob, line_start=1, line_end=1,
+                       author="legacy", body="legacy comment no file_path")
+
+        results = collect_comments(
+            file_path=str(doc), repo=str(temp_repo), db_path=str(db_path)
+        )
+        assert len(results) == 1
+        c = results[0]
+        assert c["body"] == "legacy comment no file_path"
+        assert c["current_line_start"] == 1
+
+    def test_mixed_file_path_and_null(self, temp_repo, temp_db):
+        """Both file_path and NULL comments for the same file are returned."""
+        db_path, conn = temp_db
+        doc = temp_repo / "doc.md"
+        doc.write_text("line1\nline2\nline3\n")
+        _run_git(temp_repo, "add", "doc.md")
+        _run_git(temp_repo, "commit", "-m", "add doc")
+
+        blob = _blob_id(temp_repo, doc)
+        # Legacy comment (no file_path)
+        create_comment(conn, file_id=blob, line_start=1, line_end=1,
+                       author="legacy", body="no path")
+        # New comment (with file_path)
+        create_comment(conn, file_id=blob, line_start=2, line_end=2,
+                       author="new", body="with path",
+                       file_path="doc.md")
+
+        results = collect_comments(
+            file_path=str(doc), repo=str(temp_repo), db_path=str(db_path)
+        )
+        assert len(results) == 2
+        bodies = {c["body"] for c in results}
+        assert "no path" in bodies
+        assert "with path" in bodies

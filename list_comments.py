@@ -14,7 +14,7 @@ import json as json_mod
 import subprocess
 from pathlib import Path
 
-from db import get_connection, init_db, list_comments
+from db import get_connection, init_db, list_comments, list_comments_by_path
 from file_id import content_hash_id
 
 
@@ -170,6 +170,58 @@ def collect_comments(
     results = []
     seen_ids = set()
 
+    # Fast path: fetch comments that have file_path set (direct indexed query)
+    fast_path_comments = list_comments_by_path(conn, rel_path, include_resolved=include_resolved)
+    for c in fast_path_comments:
+        if c["id"] in seen_ids:
+            continue
+        seen_ids.add(c["id"])
+
+        entry = {
+            "id": c["id"],
+            "file_id": c["file_id"],
+            "author": c["author"],
+            "body": c["body"],
+            "resolved": c["resolved"],
+            "created_at": c["created_at"],
+            "updated_at": c["updated_at"],
+            "parent_id": c["parent_id"],
+            "original_line_start": c["line_start"],
+            "original_line_end": c["line_end"],
+            "original_commit": None,
+            "current_line_start": None,
+            "current_line_end": None,
+            "status": "current",
+        }
+
+        # Check if this comment is on the current blob
+        is_current = (c["file_id"] == current_blob or c["file_id"] == current_content_hash)
+
+        if is_current:
+            entry["current_line_start"] = c["line_start"]
+            entry["current_line_end"] = c["line_end"]
+            entry["status"] = "current"
+        else:
+            # Comment is on an older version — need line translation
+            commit_for_blob = blob_map.get(c["file_id"])
+            if commit_for_blob is not None:
+                entry["original_commit"] = commit_for_blob[:8]
+                cur_start, cur_end, status = _forward_map_lines(
+                    repo, rel_path, commit_for_blob, c["line_start"], c["line_end"],
+                    head_sha,
+                )
+                entry["current_line_start"] = cur_start
+                entry["current_line_end"] = cur_end
+                entry["status"] = status
+            else:
+                # Blob not in history (e.g. content-hash only)
+                entry["current_line_start"] = c["line_start"]
+                entry["current_line_end"] = c["line_end"]
+                entry["status"] = "current"
+
+        results.append(entry)
+
+    # Fallback: blob-enumeration walk for legacy rows (file_path IS NULL)
     for blob_id, commit in blob_map.items():
         comments = list_comments(conn, blob_id, include_resolved=include_resolved)
         for c in comments:

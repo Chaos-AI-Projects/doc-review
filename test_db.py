@@ -159,6 +159,85 @@ class TestReplyThreading:
         assert replies == []
 
 
+class TestFilePath:
+    """Tests for the file_path column — schema migration and persistence."""
+
+    def test_file_path_column_exists_new_db(self, conn):
+        """New databases should have the file_path column."""
+        cur = conn.execute("PRAGMA table_info(comments)")
+        columns = {row[1] for row in cur.fetchall()}
+        assert "file_path" in columns
+
+    def test_file_path_stored_on_create(self, conn):
+        """create_comment with file_path should persist it."""
+        c = create_comment(
+            conn,
+            file_id="blob123",
+            line_start=5,
+            line_end=5,
+            author="tester",
+            body="path test",
+            file_path="docs/readme.md",
+        )
+        assert c["file_path"] == "docs/readme.md"
+
+    def test_file_path_nullable(self, conn):
+        """create_comment without file_path should store NULL (backward-compat)."""
+        c = _make_comment(conn)
+        assert c["file_path"] is None
+
+    def test_migrate_existing_db_adds_file_path(self):
+        """An existing DB without file_path should gain the column after init_db."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "legacy.db"
+            # Create a legacy DB without the file_path column
+            legacy_conn = sqlite3.connect(str(db_path))
+            legacy_conn.execute("""
+                CREATE TABLE comments (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id     TEXT    NOT NULL,
+                    line_start  INTEGER NOT NULL,
+                    line_end    INTEGER NOT NULL,
+                    author      TEXT    NOT NULL,
+                    body        TEXT    NOT NULL,
+                    parent_id   INTEGER,
+                    resolved    INTEGER NOT NULL DEFAULT 0,
+                    created_at  TEXT    NOT NULL,
+                    updated_at  TEXT    NOT NULL,
+                    FOREIGN KEY (parent_id) REFERENCES comments(id)
+                )
+            """)
+            legacy_conn.execute("""
+                INSERT INTO comments (file_id, line_start, line_end, author, body,
+                                      parent_id, resolved, created_at, updated_at)
+                VALUES ('old_blob', 1, 1, 'alice', 'old comment', NULL, 0,
+                        '2026-01-01T00:00:00', '2026-01-01T00:00:00')
+            """)
+            legacy_conn.commit()
+            legacy_conn.close()
+
+            # Now open with our code — should migrate
+            conn = get_connection(db_path)
+            init_db(conn)
+
+            # Column should exist
+            cur = conn.execute("PRAGMA table_info(comments)")
+            columns = {row[1] for row in cur.fetchall()}
+            assert "file_path" in columns
+
+            # Existing row should have file_path = NULL
+            row = conn.execute("SELECT file_path FROM comments WHERE id=1").fetchone()
+            assert row[0] is None
+
+            conn.close()
+
+    def test_file_path_index_exists(self, conn):
+        """The idx_comments_file_path index should be created."""
+        cur = conn.execute("PRAGMA index_list(comments)")
+        index_names = {row[1] for row in cur.fetchall()}
+        assert "idx_comments_file_path" in index_names
+
+
 class TestGetConnection:
     def test_creates_file(self):
         with tempfile.TemporaryDirectory() as td:
