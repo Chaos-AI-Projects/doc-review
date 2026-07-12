@@ -6,9 +6,6 @@
     var commentsData = JSON.parse(
         document.getElementById("comments-data").textContent
     );
-    var repliesData = JSON.parse(
-        document.getElementById("replies-data").textContent
-    );
 
     var sidebar = document.getElementById("sidebar-content");
     var formTpl = document.getElementById("comment-form-tpl");
@@ -149,8 +146,7 @@
         return d.innerHTML;
     }
 
-    function commentCardHtml(c, depth) {
-        depth = depth || 0;
+    function commentCardHtml(c) {
         var cls = "comment-card" + (c.resolved ? " resolved" : "");
         var html = '<div class="' + cls + '">';
         html +=
@@ -184,27 +180,7 @@
                 '">' +
                 '<button type="submit">Unresolve</button></form>';
         }
-        if (depth === 0) {
-            html +=
-                '<button class="action-link reply-btn" data-comment-id="' +
-                c.id +
-                '" data-line-start="' +
-                c.line_start +
-                '" data-line-end="' +
-                c.line_end +
-                '">Reply</button>';
-        }
         html += "</div>";
-
-        var replies = repliesData[String(c.id)] || [];
-        if (replies.length > 0) {
-            html += '<div class="reply-thread">';
-            for (var i = 0; i < replies.length; i++) {
-                html += commentCardHtml(replies[i], depth + 1);
-            }
-            html += "</div>";
-        }
-
         html += "</div>";
         return html;
     }
@@ -222,7 +198,7 @@
             : "Lines " + startLine + "-" + endLine;
         var html = "<h3>" + label + "</h3>";
         for (var i = 0; i < comments.length; i++) {
-            html += commentCardHtml(comments[i], 0);
+            html += commentCardHtml(comments[i]);
         }
 
         var frag = formTpl.content.cloneNode(true);
@@ -241,11 +217,6 @@
                 sidebar.innerHTML =
                     '<p class="sidebar-hint">Click a block to add a comment.</p>';
             });
-        }
-
-        var replyBtns = sidebar.querySelectorAll(".reply-btn");
-        for (var j = 0; j < replyBtns.length; j++) {
-            replyBtns[j].addEventListener("click", handleReply);
         }
 
         document.querySelectorAll(".source-line.active").forEach(function (el) {
@@ -268,7 +239,7 @@
         var comments = commentsData[String(startLine)] || [];
         var html = "";
         for (var i = 0; i < comments.length; i++) {
-            html += commentCardHtml(comments[i], 0);
+            html += commentCardHtml(comments[i]);
         }
         var frag = formTpl.content.cloneNode(true);
         var form = frag.querySelector("form");
@@ -288,39 +259,6 @@
         if (cancelBtn) {
             cancelBtn.addEventListener("click", function () {
                 panel.remove();
-            });
-        }
-
-        var replyBtns = panel.querySelectorAll(".reply-btn");
-        for (var j = 0; j < replyBtns.length; j++) {
-            replyBtns[j].addEventListener("click", handleReply);
-        }
-    }
-
-    /* ── Reply handler ── */
-
-    function handleReply(e) {
-        var btn = e.currentTarget;
-        var commentId = btn.getAttribute("data-comment-id");
-        var startLine = btn.getAttribute("data-line-start");
-        var endLine = btn.getAttribute("data-line-end");
-        var card = btn.closest(".comment-card");
-        if (!card) return;
-
-        if (card.querySelector(".comment-form")) return;
-
-        var frag = formTpl.content.cloneNode(true);
-        var form = frag.querySelector("form");
-        form.querySelector('[name="line_start"]').value = startLine;
-        form.querySelector('[name="line_end"]').value = endLine;
-        form.querySelector('[name="parent_id"]').value = commentId;
-        card.appendChild(frag);
-
-        var cancelBtn = card.querySelector(".cancel-btn");
-        if (cancelBtn) {
-            cancelBtn.addEventListener("click", function () {
-                var f = card.querySelector(".comment-form");
-                if (f) f.remove();
             });
         }
     }

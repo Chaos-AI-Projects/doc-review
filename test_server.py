@@ -337,11 +337,17 @@ class TestBlockRendering:
         assert "item two" in html
 
 
-class TestReplyNotDoubleRendered:
-    """Replies must appear ONLY nested under their parent, not as top-level cards."""
+class TestFlatCommentThreads:
+    """Comments are a flat, time-ordered list per block — no nesting or reply threading."""
 
-    def test_reply_only_in_reply_map_not_comments_by_block(self, client, source_dir):
-        """A reply (parent_id != None) must not appear in comments_by_block."""
+    def test_all_comments_in_block_including_former_replies(self, client, source_dir):
+        """TDD anchor (a): a block with three comments (including one with parent_id set)
+        returns all three in comments_by_block in created_at order, and the view context
+        no longer contains reply_map."""
+        import json
+        import re
+        import time
+
         from db import create_comment, get_connection, init_db
         from file_id import derive_file_id
 
@@ -352,67 +358,55 @@ class TestReplyNotDoubleRendered:
         conn = get_connection(db_path)
         init_db(conn)
 
-        # Create a top-level comment
-        parent = create_comment(
-            conn,
-            file_id=fid,
-            line_start=1,
-            line_end=1,
-            author="reviewer",
-            body="Parent comment",
+        # Create three comments at different times — the third has a parent_id
+        # (a legacy nested reply) that should still appear in the flat list.
+        c1 = create_comment(
+            conn, file_id=fid, line_start=1, line_end=1,
+            author="alice", body="First comment",
         )
-        # Create a reply to it
-        reply = create_comment(
-            conn,
-            file_id=fid,
-            line_start=1,
-            line_end=1,
-            author="author",
-            body="Reply comment unique xyz987",
-            parent_id=parent["id"],
+        time.sleep(0.05)
+        c2 = create_comment(
+            conn, file_id=fid, line_start=1, line_end=1,
+            author="bob", body="Second comment",
+        )
+        time.sleep(0.05)
+        c3 = create_comment(
+            conn, file_id=fid, line_start=1, line_end=1,
+            author="carol", body="Legacy reply (was nested)",
+            parent_id=c1["id"],
         )
         conn.close()
 
         resp = client.get("/view?path=test.md")
         assert resp.status_code == 200
 
-        # The reply body should appear in the page (in the reply_map data)
-        assert "Reply comment unique xyz987" in resp.text
-
-        # Parse the embedded JSON data to verify structure
-        import json
-        import re
-
-        # Extract comments-data JSON (top-level comments by block)
+        # Extract comments-data JSON
         comments_data_match = re.search(
             r'id="comments-data"[^>]*>(.*?)</script>', resp.text, re.DOTALL
         )
         assert comments_data_match, "Expected comments-data script tag"
         comments_data = json.loads(comments_data_match.group(1))
 
-        # Extract replies-data JSON
+        # All three comments must be in the block's list
+        block_comments = comments_data.get("1", [])
+        assert len(block_comments) == 3, \
+            f"Expected 3 comments in block, got {len(block_comments)}"
+
+        # They must be in created_at order
+        ids = [c["id"] for c in block_comments]
+        assert ids == [c1["id"], c2["id"], c3["id"]], \
+            f"Expected created_at order {[c1['id'], c2['id'], c3['id']]}, got {ids}"
+
+        # There must be NO replies-data script tag (no reply_map)
         replies_data_match = re.search(
-            r'id="replies-data"[^>]*>(.*?)</script>', resp.text, re.DOTALL
+            r'id="replies-data"', resp.text
         )
-        assert replies_data_match, "Expected replies-data script tag"
-        replies_data = json.loads(replies_data_match.group(1))
+        assert replies_data_match is None, \
+            "View must not contain replies-data — reply_map has been removed"
 
-        # The reply ID must NOT be in comments_by_block (comments-data)
-        all_comment_ids_in_blocks = []
-        for block_comments in comments_data.values():
-            for c in block_comments:
-                all_comment_ids_in_blocks.append(c["id"])
-        assert reply["id"] not in all_comment_ids_in_blocks, \
-            "Reply must not appear as a top-level comment in comments_by_block"
-
-        # The reply ID must be in reply_map (replies-data) under its parent
-        parent_replies = replies_data.get(str(parent["id"]), [])
-        reply_ids_under_parent = [r["id"] for r in parent_replies]
-        assert reply["id"] in reply_ids_under_parent, \
-            "Reply must appear in reply_map under its parent"
-
-    def test_block_toplevel_count_excludes_replies(self, client, source_dir):
-        """Block comment count should count only top-level comments, not replies."""
+    def test_no_reply_thread_divs_or_reply_buttons(self, client, source_dir):
+        """TDD anchor (b): no nested .reply-thread div and no per-comment Reply button
+        in the rendered view; exactly one comment/reply box per block thread."""
         from db import create_comment, get_connection, init_db
         from file_id import derive_file_id
 
@@ -423,10 +417,41 @@ class TestReplyNotDoubleRendered:
         conn = get_connection(db_path)
         init_db(conn)
 
-        # Create one top-level comment + two replies
+        create_comment(
+            conn, file_id=fid, line_start=1, line_end=1,
+            author="alice", body="A comment",
+        )
+        conn.close()
+
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+
+        # No .reply-thread div in the page
+        assert "reply-thread" not in resp.text, \
+            "Page must not contain reply-thread elements"
+
+        # No per-comment Reply button
+        assert "reply-btn" not in resp.text, \
+            "Page must not contain per-comment reply buttons"
+
+    def test_block_count_includes_all_comments(self, client, source_dir):
+        """Block comment count includes all comments (including former replies)."""
+        import json
+        import re
+
+        from db import create_comment, get_connection, init_db
+        from file_id import derive_file_id
+
+        file_path = str(Path(source_dir) / "test.md")
+        fid = derive_file_id(file_path)
+
+        db_path = Path(source_dir) / "test_comments.db"
+        conn = get_connection(db_path)
+        init_db(conn)
+
         parent = create_comment(
             conn, file_id=fid, line_start=1, line_end=1,
-            author="reviewer", body="Top level only",
+            author="reviewer", body="Top level",
         )
         create_comment(
             conn, file_id=fid, line_start=1, line_end=1,
@@ -443,20 +468,16 @@ class TestReplyNotDoubleRendered:
         resp = client.get("/view?path=test.md")
         assert resp.status_code == 200
 
-        import json
-        import re
-
         comments_data_match = re.search(
             r'id="comments-data"[^>]*>(.*?)</script>', resp.text, re.DOTALL
         )
         assert comments_data_match
         comments_data = json.loads(comments_data_match.group(1))
 
-        # Block starting at line 1 should have exactly 1 top-level comment
-        # (keys in comments_data are stringified block start lines)
+        # Block should have all 3 comments (parent + 2 former replies)
         block_comments = comments_data.get("1", [])
-        assert len(block_comments) == 1, \
-            f"Expected 1 top-level comment in block, got {len(block_comments)}"
+        assert len(block_comments) == 3, \
+            f"Expected 3 comments in block, got {len(block_comments)}"
 
 
 class TestCacheControl:

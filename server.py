@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
-from db import create_comment, get_connection, get_replies, init_db, list_comments, resolve_comment, unresolve_comment
+from db import create_comment, get_connection, init_db, list_comments, resolve_comment, unresolve_comment
 from file_id import derive_file_id
 from renderer import extract_toc, render_markdown_blocks
 
@@ -112,20 +112,13 @@ async def view_file(request: Request, path: str = Query(...)):
             for ln in range(block["start_line"], block["end_line"] + 1):
                 line_to_block_start[ln] = block["start_line"]
 
-        # Group comments by their containing block's start_line.
-        # Skip replies (parent_id is not None) — they render nested via reply_map.
+        # Group ALL comments by their containing block's start_line.
+        # Flat thread model: no nesting, no reply_map — every comment
+        # (regardless of parent_id) appears in the block's time-ordered list.
         comments_by_block: dict[int, list[dict]] = {}
         for c in comments:
-            if c["parent_id"] is not None:
-                continue
             block_start = line_to_block_start.get(c["line_start"], c["line_start"])
             comments_by_block.setdefault(block_start, []).append(c)
-
-        # Build reply map
-        reply_map: dict[int, list[dict]] = {}
-        for c in comments:
-            if c["parent_id"] is None:
-                reply_map[c["id"]] = get_replies(conn, c["id"])
     finally:
         conn.close()
 
@@ -140,7 +133,6 @@ async def view_file(request: Request, path: str = Query(...)):
             "blocks": blocks,
             "toc": toc,
             "comments_by_block": comments_by_block,
-            "reply_map": reply_map,
             "files": all_files,
         },
     )
