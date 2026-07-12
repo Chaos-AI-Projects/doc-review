@@ -84,11 +84,13 @@ def _list_files(root: Path) -> list[str]:
 async def index(request: Request):
     """Directory browser / file list."""
     files = _list_files(_source_root)
-    return templates.TemplateResponse(
+    resp = templates.TemplateResponse(
         request,
         "index.html",
         context={"files": files, "root": str(_source_root)},
     )
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.get("/view", response_class=HTMLResponse)
@@ -111,8 +113,11 @@ async def view_file(request: Request, path: str = Query(...)):
                 line_to_block_start[ln] = block["start_line"]
 
         # Group comments by their containing block's start_line.
+        # Skip replies (parent_id is not None) — they render nested via reply_map.
         comments_by_block: dict[int, list[dict]] = {}
         for c in comments:
+            if c["parent_id"] is not None:
+                continue
             block_start = line_to_block_start.get(c["line_start"], c["line_start"])
             comments_by_block.setdefault(block_start, []).append(c)
 
@@ -126,7 +131,7 @@ async def view_file(request: Request, path: str = Query(...)):
 
     all_files = _list_files(_source_root)
 
-    return templates.TemplateResponse(
+    resp = templates.TemplateResponse(
         request,
         "view.html",
         context={
@@ -139,6 +144,8 @@ async def view_file(request: Request, path: str = Query(...)):
             "files": all_files,
         },
     )
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.post("/comment")

@@ -335,3 +335,141 @@ class TestBlockRendering:
         # Just verify the list items are present
         assert "item one" in html
         assert "item two" in html
+
+
+class TestReplyNotDoubleRendered:
+    """Replies must appear ONLY nested under their parent, not as top-level cards."""
+
+    def test_reply_only_in_reply_map_not_comments_by_block(self, client, source_dir):
+        """A reply (parent_id != None) must not appear in comments_by_block."""
+        from db import create_comment, get_connection, init_db
+        from file_id import derive_file_id
+
+        file_path = str(Path(source_dir) / "test.md")
+        fid = derive_file_id(file_path)
+
+        db_path = Path(source_dir) / "test_comments.db"
+        conn = get_connection(db_path)
+        init_db(conn)
+
+        # Create a top-level comment
+        parent = create_comment(
+            conn,
+            file_id=fid,
+            line_start=1,
+            line_end=1,
+            author="reviewer",
+            body="Parent comment",
+        )
+        # Create a reply to it
+        reply = create_comment(
+            conn,
+            file_id=fid,
+            line_start=1,
+            line_end=1,
+            author="author",
+            body="Reply comment unique xyz987",
+            parent_id=parent["id"],
+        )
+        conn.close()
+
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+
+        # The reply body should appear in the page (in the reply_map data)
+        assert "Reply comment unique xyz987" in resp.text
+
+        # Parse the embedded JSON data to verify structure
+        import json
+        import re
+
+        # Extract comments-data JSON (top-level comments by block)
+        comments_data_match = re.search(
+            r'id="comments-data"[^>]*>(.*?)</script>', resp.text, re.DOTALL
+        )
+        assert comments_data_match, "Expected comments-data script tag"
+        comments_data = json.loads(comments_data_match.group(1))
+
+        # Extract replies-data JSON
+        replies_data_match = re.search(
+            r'id="replies-data"[^>]*>(.*?)</script>', resp.text, re.DOTALL
+        )
+        assert replies_data_match, "Expected replies-data script tag"
+        replies_data = json.loads(replies_data_match.group(1))
+
+        # The reply ID must NOT be in comments_by_block (comments-data)
+        all_comment_ids_in_blocks = []
+        for block_comments in comments_data.values():
+            for c in block_comments:
+                all_comment_ids_in_blocks.append(c["id"])
+        assert reply["id"] not in all_comment_ids_in_blocks, \
+            "Reply must not appear as a top-level comment in comments_by_block"
+
+        # The reply ID must be in reply_map (replies-data) under its parent
+        parent_replies = replies_data.get(str(parent["id"]), [])
+        reply_ids_under_parent = [r["id"] for r in parent_replies]
+        assert reply["id"] in reply_ids_under_parent, \
+            "Reply must appear in reply_map under its parent"
+
+    def test_block_toplevel_count_excludes_replies(self, client, source_dir):
+        """Block comment count should count only top-level comments, not replies."""
+        from db import create_comment, get_connection, init_db
+        from file_id import derive_file_id
+
+        file_path = str(Path(source_dir) / "test.md")
+        fid = derive_file_id(file_path)
+
+        db_path = Path(source_dir) / "test_comments.db"
+        conn = get_connection(db_path)
+        init_db(conn)
+
+        # Create one top-level comment + two replies
+        parent = create_comment(
+            conn, file_id=fid, line_start=1, line_end=1,
+            author="reviewer", body="Top level only",
+        )
+        create_comment(
+            conn, file_id=fid, line_start=1, line_end=1,
+            author="author", body="Reply one",
+            parent_id=parent["id"],
+        )
+        create_comment(
+            conn, file_id=fid, line_start=1, line_end=1,
+            author="author", body="Reply two",
+            parent_id=parent["id"],
+        )
+        conn.close()
+
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+
+        import json
+        import re
+
+        comments_data_match = re.search(
+            r'id="comments-data"[^>]*>(.*?)</script>', resp.text, re.DOTALL
+        )
+        assert comments_data_match
+        comments_data = json.loads(comments_data_match.group(1))
+
+        # Block starting at line 1 should have exactly 1 top-level comment
+        # (keys in comments_data are stringified block start lines)
+        block_comments = comments_data.get("1", [])
+        assert len(block_comments) == 1, \
+            f"Expected 1 top-level comment in block, got {len(block_comments)}"
+
+
+class TestCacheControl:
+    """HTML responses must include Cache-Control: no-store to prevent stale views."""
+
+    def test_view_has_cache_control_no_store(self, client):
+        """GET /view must include Cache-Control: no-store."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        assert "no-store" in resp.headers.get("cache-control", "")
+
+    def test_index_has_cache_control_no_store(self, client):
+        """GET / must include Cache-Control: no-store."""
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert "no-store" in resp.headers.get("cache-control", "")
