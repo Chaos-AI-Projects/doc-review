@@ -1,5 +1,6 @@
 """Route-level tests for the doc-review FastAPI server."""
 
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -585,3 +586,232 @@ class TestCacheControl:
         resp = client.get("/")
         assert resp.status_code == 200
         assert "no-store" in resp.headers.get("cache-control", "")
+
+
+# ── Anchor migration via git blame (#406) ───────────────────────────────
+
+GIT_DOC = "# Title\n\npara one\n\npara two\n\npara three\n"
+# Line numbers:  1 '# Title', 2 '', 3 'para one', 4 '', 5 'para two',
+#                6 '', 7 'para three'
+
+
+def _git(cwd, *args) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(cwd), *args],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, f"git {args} failed: {result.stderr}"
+    return result.stdout.strip()
+
+
+@pytest.fixture
+def git_source_dir():
+    """Temp directory that is a git repo with a committed markdown file."""
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "doc.md").write_text(GIT_DOC)
+        _git(td, "init", "-q")
+        _git(td, "config", "user.email", "test@example.com")
+        _git(td, "config", "user.name", "Test")
+        _git(td, "add", "doc.md")
+        _git(td, "commit", "-qm", "initial doc")
+        yield td
+
+
+@pytest.fixture
+def git_client(git_source_dir):
+    db_path = Path(git_source_dir) / "test_comments.db"
+    configure(git_source_dir, db_path)
+    return TestClient(app)
+
+
+def _post_comment(client, git_source_dir, line_start, line_end, body):
+    from file_id import derive_file_id
+
+    fid = derive_file_id(str(Path(git_source_dir) / "doc.md"))
+    resp = client.post(
+        "/comment",
+        data={
+            "file_id": fid,
+            "path": "doc.md",
+            "line_start": str(line_start),
+            "line_end": str(line_end),
+            "author": "reviewer",
+            "body": body,
+            "parent_id": "0",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+
+def _db_comment(git_source_dir, body):
+    from db import get_connection
+
+    conn = get_connection(Path(git_source_dir) / "test_comments.db")
+    row = conn.execute(
+        "SELECT * FROM comments WHERE body = ?", (body,)
+    ).fetchone()
+    conn.close()
+    assert row is not None, f"No comment row with body {body!r}"
+    return dict(row)
+
+
+def _comments_data(resp_text):
+    import json
+    import re
+
+    m = re.search(r'id="comments-data"[^>]*>(.*?)</script>', resp_text, re.DOTALL)
+    assert m, "Expected comments-data script tag"
+    return json.loads(m.group(1))
+
+
+class TestAnchorCommitOnCreate:
+    """POST /comment records the anchor commit for clean git-tracked files (#406)."""
+
+    def test_create_sets_anchor_commit_for_clean_git_file(
+        self, git_client, git_source_dir
+    ):
+        _post_comment(git_client, git_source_dir, 5, 5, "anchored comment")
+        row = _db_comment(git_source_dir, "anchored comment")
+        head = _git(git_source_dir, "rev-parse", "HEAD")
+        assert row["anchor_commit"] == head
+
+    def test_create_null_anchor_for_dirty_file(self, git_client, git_source_dir):
+        md = Path(git_source_dir) / "doc.md"
+        md.write_text(GIT_DOC + "\nuncommitted trailer\n")
+        _post_comment(git_client, git_source_dir, 5, 5, "dirty-create comment")
+        row = _db_comment(git_source_dir, "dirty-create comment")
+        assert row["anchor_commit"] is None
+
+    def test_create_null_anchor_for_non_git_file(self, client, source_dir):
+        from db import get_connection
+
+        from file_id import derive_file_id
+
+        fid = derive_file_id(str(Path(source_dir) / "test.md"))
+        client.post(
+            "/comment",
+            data={
+                "file_id": fid,
+                "path": "test.md",
+                "line_start": "1",
+                "line_end": "1",
+                "body": "non-git comment",
+                "parent_id": "0",
+            },
+            follow_redirects=False,
+        )
+        conn = get_connection(Path(source_dir) / "test_comments.db")
+        row = conn.execute(
+            "SELECT * FROM comments WHERE body = 'non-git comment'"
+        ).fetchone()
+        conn.close()
+        assert row is not None
+        assert row["anchor_commit"] is None
+
+
+class TestAnchorMigration:
+    """Comment anchors follow the text across committed edits via reverse blame (#406)."""
+
+    def test_shift_migrates_single_line_anchor(self, git_client, git_source_dir):
+        """Insert lines above the range + commit → anchor moves with the text
+        and the DB row is updated (blame runs once per edit)."""
+        _post_comment(git_client, git_source_dir, 5, 5, "on para two")
+        md = Path(git_source_dir) / "doc.md"
+        md.write_text("intro\n\n" + GIT_DOC)  # para two shifts 5 → 7
+        _git(git_source_dir, "commit", "-qam", "prepend intro")
+        new_head = _git(git_source_dir, "rev-parse", "HEAD")
+
+        resp = git_client.get("/view?path=doc.md")
+        assert resp.status_code == 200
+
+        # Rendered view anchors the comment to the shifted block.
+        data = _comments_data(resp.text)
+        block_comments = data.get("7", [])
+        bodies = [c["body"] for c in block_comments]
+        assert "on para two" in bodies, f"comment not on block 7: {data}"
+
+        # DB row was migrated and re-anchored at the new HEAD.
+        row = _db_comment(git_source_dir, "on para two")
+        assert row["line_start"] == 7
+        assert row["line_end"] == 7
+        assert row["anchor_commit"] == new_head
+
+    def test_shift_migrates_multiline_range(self, git_client, git_source_dir):
+        """A multi-line range maps to [min, max] of the surviving lines."""
+        _post_comment(git_client, git_source_dir, 3, 5, "range comment")
+        md = Path(git_source_dir) / "doc.md"
+        md.write_text("intro\n\n" + GIT_DOC)  # 3..5 shifts to 5..7
+        _git(git_source_dir, "commit", "-qam", "prepend intro")
+
+        resp = git_client.get("/view?path=doc.md")
+        assert resp.status_code == 200
+
+        row = _db_comment(git_source_dir, "range comment")
+        assert row["line_start"] == 5
+        assert row["line_end"] == 7
+        assert row["anchor_commit"] == _git(git_source_dir, "rev-parse", "HEAD")
+
+    def test_range_deleted_clamps_but_stays_visible(
+        self, git_client, git_source_dir
+    ):
+        """Deleting the commented range clamps anchors to the current file
+        length; the comment remains visible."""
+        _post_comment(git_client, git_source_dir, 7, 7, "on para three")
+        md = Path(git_source_dir) / "doc.md"
+        md.write_text("# Title\n\npara one\n\npara two\n")  # 5 lines, para three gone
+        _git(git_source_dir, "commit", "-qam", "drop para three")
+        new_head = _git(git_source_dir, "rev-parse", "HEAD")
+
+        resp = git_client.get("/view?path=doc.md")
+        assert resp.status_code == 200
+
+        data = _comments_data(resp.text)
+        all_bodies = [c["body"] for cs in data.values() for c in cs]
+        assert "on para three" in all_bodies, "clamped comment must stay visible"
+
+        row = _db_comment(git_source_dir, "on para three")
+        assert row["line_start"] == 5
+        assert row["line_end"] == 5
+        assert row["anchor_commit"] == new_head
+
+    def test_dirty_tree_skips_migration(self, git_client, git_source_dir):
+        """Uncommitted edits to the file must not touch stored anchors."""
+        _post_comment(git_client, git_source_dir, 5, 5, "dirty-view comment")
+        old_head = _git(git_source_dir, "rev-parse", "HEAD")
+        md = Path(git_source_dir) / "doc.md"
+        md.write_text("intro\n\n" + GIT_DOC)  # NOT committed
+
+        resp = git_client.get("/view?path=doc.md")
+        assert resp.status_code == 200
+
+        row = _db_comment(git_source_dir, "dirty-view comment")
+        assert row["line_start"] == 5
+        assert row["line_end"] == 5
+        assert row["anchor_commit"] == old_head
+
+    def test_legacy_null_anchor_untouched(self, git_client, git_source_dir):
+        """Rows with anchor_commit NULL are served as-is and never auto-adopt
+        a commit."""
+        from db import create_comment, get_connection, init_db
+
+        conn = get_connection(Path(git_source_dir) / "test_comments.db")
+        init_db(conn)
+        create_comment(
+            conn, file_id="legacyfid", line_start=5, line_end=5,
+            author="old-timer", body="legacy comment", file_path="doc.md",
+        )
+        conn.close()
+
+        md = Path(git_source_dir) / "doc.md"
+        md.write_text("intro\n\n" + GIT_DOC)
+        _git(git_source_dir, "commit", "-qam", "prepend intro")
+
+        resp = git_client.get("/view?path=doc.md")
+        assert resp.status_code == 200
+        assert "legacy comment" in resp.text
+
+        row = _db_comment(git_source_dir, "legacy comment")
+        assert row["line_start"] == 5
+        assert row["line_end"] == 5
+        assert row["anchor_commit"] is None

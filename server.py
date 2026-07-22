@@ -9,6 +9,8 @@ Serves on 127.0.0.1:28080 by default (override with --host / --port).
 import argparse
 import json
 import os
+import re
+import subprocess
 from pathlib import Path
 from urllib.parse import quote
 
@@ -26,6 +28,7 @@ from db import (
     list_comments_by_path,
     resolve_comment,
     unresolve_comment,
+    update_comment_anchor,
 )
 from file_id import derive_file_id
 from renderer import extract_toc, render_markdown_blocks
@@ -85,6 +88,120 @@ def _list_files(root: Path) -> list[str]:
     return files
 
 
+# ── Git anchor helpers (#406) ───────────────────────────────────────────
+#
+# All git calls run against the repo containing the *served file* via
+# `git -C <file dir>`, never the server process cwd (the cwd mistake was
+# the exact bug documented in #404).
+
+_BLAME_HEADER_RE = re.compile(r"^([0-9a-f]{40}) (\d+) (\d+)")
+
+
+def _git_head_if_clean(target: Path) -> str | None:
+    """Return HEAD of the repo containing *target* when the file is
+    git-tracked and clean vs HEAD; otherwise None."""
+    d = str(target.parent)
+    name = target.name
+    try:
+        tracked = subprocess.run(
+            ["git", "-C", d, "ls-files", "--error-unmatch", name],
+            capture_output=True, timeout=5,
+        )
+        if tracked.returncode != 0:
+            return None
+        clean = subprocess.run(
+            ["git", "-C", d, "diff", "--quiet", "HEAD", "--", name],
+            capture_output=True, timeout=5,
+        )
+        if clean.returncode != 0:
+            return None
+        head = subprocess.run(
+            ["git", "-C", d, "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if head.returncode != 0:
+            return None
+        return head.stdout.strip() or None
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+
+def _blame_surviving_lines(
+    target: Path, anchor_commit: str, head: str, line_start: int, line_end: int
+) -> list[int] | None:
+    """Map *line_start..line_end* (valid at *anchor_commit*) to the line
+    numbers those lines occupy in *head*, via reverse blame.
+
+    Returns the surviving line numbers in HEAD ([] when the whole range was
+    deleted), or None when blame itself failed (caller should leave the
+    stored anchor untouched).
+    """
+    try:
+        result = subprocess.run(
+            [
+                "git", "-C", str(target.parent),
+                "blame", "--reverse", "--porcelain",
+                f"{anchor_commit}..HEAD",
+                "-L", f"{line_start},{line_end}",
+                "--", target.name,
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    if result.returncode != 0:
+        return None
+    survivors = []
+    for line in result.stdout.splitlines():
+        m = _BLAME_HEADER_RE.match(line)
+        # Reverse blame attributes a line to the last commit in which it
+        # existed; lines surviving to HEAD are attributed to HEAD itself,
+        # with the header's second field being the line number in HEAD.
+        if m and m.group(1) == head:
+            survivors.append(int(m.group(2)))
+    return survivors
+
+
+def _migrate_comment_anchors(
+    conn, comments: list[dict], target: Path, total_lines: int
+) -> None:
+    """Re-anchor comments whose anchor_commit lags the file's current HEAD.
+
+    Mutates *comments* in place and persists updates, so blame runs once per
+    edit rather than on every view.  Skipped entirely when the file is
+    untracked or has uncommitted changes (dirty tree: serve stored anchors).
+    Legacy rows (anchor_commit NULL) are never touched.
+    """
+    head: str | None = None
+    head_checked = False
+    for c in comments:
+        anchor = c.get("anchor_commit")
+        if not anchor:
+            continue
+        if not head_checked:
+            head = _git_head_if_clean(target)
+            head_checked = True
+        if head is None or anchor == head:
+            continue
+        survivors = _blame_surviving_lines(
+            target, anchor, head, c["line_start"], c["line_end"]
+        )
+        if survivors is None:
+            continue  # git failure — serve stored anchors unchanged
+        if survivors:
+            new_start, new_end = min(survivors), max(survivors)
+        else:
+            # Whole range deleted: clamp to current file length so the
+            # comment stays visible on the nearest block.
+            new_start = max(1, min(c["line_start"], total_lines))
+            new_end = max(1, min(c["line_end"], total_lines))
+        update_comment_anchor(
+            conn, c["id"],
+            line_start=new_start, line_end=new_end, anchor_commit=head,
+        )
+        c["line_start"], c["line_end"], c["anchor_commit"] = new_start, new_end, head
+
+
 # ── Routes ──────────────────────────────────────────────────────────────
 
 
@@ -122,8 +239,16 @@ async def view_file(request: Request, path: str = Query(...)):
             for c in list_comments(conn, fid)
             if c["file_path"] is None and c["id"] not in seen_ids
         ]
+        comments = comments + legacy
+
+        # Re-anchor comments whose anchor_commit lags the file's repo HEAD
+        # (#406) — must happen before sorting/grouping by line_start.
+        _migrate_comment_anchors(
+            conn, comments, file_path, len(source.splitlines())
+        )
+
         comments = sorted(
-            comments + legacy,
+            comments,
             key=lambda c: (c["line_start"], c["created_at"]),
         )
 
@@ -172,7 +297,7 @@ async def add_comment(
     parent_id: int | None = Form(None),
 ):
     """Create a comment (or reply) and redirect back to the file view."""
-    _resolve_file(path)  # validate path is inside source root
+    target = _resolve_file(path)  # validate path is inside source root
     conn = _conn()
     try:
         create_comment(
@@ -184,6 +309,7 @@ async def add_comment(
             body=body,
             parent_id=parent_id if parent_id and parent_id > 0 else None,
             file_path=path,
+            anchor_commit=_git_head_if_clean(target),
         )
     finally:
         conn.close()

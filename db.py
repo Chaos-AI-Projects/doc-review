@@ -14,6 +14,9 @@ comments:
     created_at  TEXT NOT NULL        -- ISO-8601
     updated_at  TEXT NOT NULL        -- ISO-8601
     file_path   TEXT                 -- relative path at comment-creation time (nullable for legacy)
+    anchor_commit TEXT               -- commit of the served file's repo at which
+                                     -- line_start/line_end were last known correct
+                                     -- (NULL: untracked/dirty at creation, or legacy)
 """
 
 import sqlite3
@@ -33,6 +36,7 @@ CREATE TABLE IF NOT EXISTS comments (
     created_at  TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL,
     file_path   TEXT,
+    anchor_commit TEXT,
     FOREIGN KEY (parent_id) REFERENCES comments(id)
 );
 CREATE INDEX IF NOT EXISTS idx_comments_file_lines
@@ -64,10 +68,12 @@ def init_db(conn: sqlite3.Connection) -> None:
         # Fresh DB — create with full schema including file_path
         conn.executescript(_SCHEMA)
     else:
-        # Existing table — migrate: add file_path column if missing
+        # Existing table — migrate: add file_path / anchor_commit columns if missing
         cols = {row[1] for row in conn.execute("PRAGMA table_info(comments)").fetchall()}
         if "file_path" not in cols:
             conn.execute("ALTER TABLE comments ADD COLUMN file_path TEXT")
+        if "anchor_commit" not in cols:
+            conn.execute("ALTER TABLE comments ADD COLUMN anchor_commit TEXT")
         # Ensure all indexes exist
         conn.executescript(
             "CREATE INDEX IF NOT EXISTS idx_comments_file_lines"
@@ -88,13 +94,16 @@ def create_comment(
     body: str,
     parent_id: int | None = None,
     file_path: str | None = None,
+    anchor_commit: str | None = None,
 ) -> dict:
     now = _now_iso()
     cur = conn.execute(
         """INSERT INTO comments (file_id, line_start, line_end, author, body,
-                                 parent_id, resolved, created_at, updated_at, file_path)
-           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
-        (file_id, line_start, line_end, author, body, parent_id, now, now, file_path),
+                                 parent_id, resolved, created_at, updated_at,
+                                 file_path, anchor_commit)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
+        (file_id, line_start, line_end, author, body, parent_id, now, now,
+         file_path, anchor_commit),
     )
     conn.commit()
     return dict(conn.execute("SELECT * FROM comments WHERE id=?", (cur.lastrowid,)).fetchone())
@@ -136,6 +145,24 @@ def list_comments_by_path(
         query += " AND resolved = 0"
     query += " ORDER BY line_start, created_at"
     return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+
+def update_comment_anchor(
+    conn: sqlite3.Connection,
+    comment_id: int,
+    *,
+    line_start: int,
+    line_end: int,
+    anchor_commit: str,
+) -> None:
+    """Persist a migrated line anchor (see #406: reverse-blame migration)."""
+    conn.execute(
+        """UPDATE comments
+           SET line_start = ?, line_end = ?, anchor_commit = ?, updated_at = ?
+           WHERE id = ?""",
+        (line_start, line_end, anchor_commit, _now_iso(), comment_id),
+    )
+    conn.commit()
 
 
 def resolve_comment(conn: sqlite3.Connection, comment_id: int) -> dict | None:
