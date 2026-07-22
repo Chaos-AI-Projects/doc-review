@@ -18,7 +18,15 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
-from db import create_comment, get_connection, init_db, list_comments, resolve_comment, unresolve_comment
+from db import (
+    create_comment,
+    get_connection,
+    init_db,
+    list_comments,
+    list_comments_by_path,
+    resolve_comment,
+    unresolve_comment,
+)
 from file_id import derive_file_id
 from renderer import extract_toc, render_markdown_blocks
 
@@ -104,7 +112,20 @@ async def view_file(request: Request, path: str = Query(...)):
 
     conn = _conn()
     try:
-        comments = list_comments(conn, fid)
+        # Look up comments by file_path — the stable identity across edits
+        # (#404). Merge in legacy rows (file_path IS NULL) that match the
+        # current content id, deduped by comment id.
+        comments = list_comments_by_path(conn, path)
+        seen_ids = {c["id"] for c in comments}
+        legacy = [
+            c
+            for c in list_comments(conn, fid)
+            if c["file_path"] is None and c["id"] not in seen_ids
+        ]
+        comments = sorted(
+            comments + legacy,
+            key=lambda c: (c["line_start"], c["created_at"]),
+        )
 
         # Map each source line to its containing block's start_line.
         line_to_block_start: dict[int, int] = {}

@@ -480,6 +480,97 @@ class TestFlatCommentThreads:
             f"Expected 3 comments in block, got {len(block_comments)}"
 
 
+class TestCommentsSurviveFileEdit:
+    """Comments are looked up by file_path, so editing the file must not orphan them (#404)."""
+
+    def test_comment_still_visible_after_file_edit(self, client, source_dir):
+        """Create a comment via POST /comment, edit the file on disk (changing its
+        content-derived file_id), GET /view again — the comment must still appear
+        in comments-data."""
+        import json
+        import re
+
+        from file_id import derive_file_id
+
+        md_file = Path(source_dir) / "test.md"
+        fid = derive_file_id(str(md_file))
+
+        resp = client.post(
+            "/comment",
+            data={
+                "file_id": fid,
+                "path": "test.md",
+                "line_start": "1",
+                "line_end": "1",
+                "author": "reviewer",
+                "body": "Survives edits",
+                "parent_id": "0",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        # Edit the file content — this changes the content-derived file_id.
+        md_file.write_text("# Hello edited\n\nThis is a MODIFIED test file.\n")
+        assert derive_file_id(str(md_file)) != fid, "Edit must change the file_id"
+
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+
+        comments_data_match = re.search(
+            r'id="comments-data"[^>]*>(.*?)</script>', resp.text, re.DOTALL
+        )
+        assert comments_data_match, "Expected comments-data script tag"
+        comments_data = json.loads(comments_data_match.group(1))
+        all_bodies = [c["body"] for cs in comments_data.values() for c in cs]
+        assert "Survives edits" in all_bodies, \
+            "Comment must survive a file edit (path-based lookup)"
+
+    def test_legacy_comment_without_file_path_still_shown(self, client, source_dir):
+        """A pre-file_path row (file_path IS NULL) whose file_id matches the current
+        content must still be shown, merged and deduped with path-keyed rows."""
+        import json
+        import re
+
+        from db import create_comment, get_connection, init_db
+        from file_id import derive_file_id
+
+        md_file = Path(source_dir) / "test.md"
+        fid = derive_file_id(str(md_file))
+
+        db_path = Path(source_dir) / "test_comments.db"
+        conn = get_connection(db_path)
+        init_db(conn)
+        # Legacy row: no file_path, keyed only by current content id.
+        create_comment(
+            conn, file_id=fid, line_start=1, line_end=1,
+            author="old-timer", body="Legacy comment",
+            file_path=None,
+        )
+        # Modern row: has file_path.
+        create_comment(
+            conn, file_id=fid, line_start=1, line_end=1,
+            author="reviewer", body="Modern comment",
+            file_path="test.md",
+        )
+        conn.close()
+
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+
+        comments_data_match = re.search(
+            r'id="comments-data"[^>]*>(.*?)</script>', resp.text, re.DOTALL
+        )
+        assert comments_data_match
+        comments_data = json.loads(comments_data_match.group(1))
+        block_comments = comments_data.get("1", [])
+        bodies = [c["body"] for c in block_comments]
+        assert "Legacy comment" in bodies
+        assert "Modern comment" in bodies
+        assert len(block_comments) == 2, \
+            f"Expected exactly 2 comments (no duplicates), got {len(block_comments)}"
+
+
 class TestCacheControl:
     """HTML responses must include Cache-Control: no-store to prevent stale views."""
 
