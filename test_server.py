@@ -886,3 +886,225 @@ class TestReplyLabel:
         assert len(reply_comments) == 1, \
             "Expected exactly one comment with parent_id set"
         assert reply_comments[0]["parent_id"] == parent["id"]
+
+
+# ── JSON Comments API (#435) ──────────────────────────────────────────
+
+
+class TestGetApiComments:
+    """GET /api/comments?path=<file> returns JSON list of comments (#435)."""
+
+    def test_returns_empty_list_when_no_comments(self, client):
+        resp = client.get("/api/comments?path=test.md")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/json")
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) == 0
+
+    def test_returns_comments_for_file(self, client, source_dir):
+        from db import create_comment, get_connection, init_db
+        from file_id import derive_file_id
+
+        file_path = str(Path(source_dir) / "test.md")
+        fid = derive_file_id(file_path)
+
+        db_path = Path(source_dir) / "test_comments.db"
+        conn = get_connection(db_path)
+        init_db(conn)
+        create_comment(
+            conn, file_id=fid, line_start=1, line_end=1,
+            author="alice", body="First comment", file_path="test.md",
+        )
+        create_comment(
+            conn, file_id=fid, line_start=3, line_end=3,
+            author="bob", body="Second comment", file_path="test.md",
+        )
+        conn.close()
+
+        resp = client.get("/api/comments?path=test.md")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 2
+        assert data[0]["author"] == "alice"
+        assert data[1]["author"] == "bob"
+
+    def test_response_includes_required_fields(self, client, source_dir):
+        from db import create_comment, get_connection, init_db
+        from file_id import derive_file_id
+
+        file_path = str(Path(source_dir) / "test.md")
+        fid = derive_file_id(file_path)
+
+        db_path = Path(source_dir) / "test_comments.db"
+        conn = get_connection(db_path)
+        init_db(conn)
+        parent = create_comment(
+            conn, file_id=fid, line_start=1, line_end=2,
+            author="reviewer", body="Check this", file_path="test.md",
+        )
+        create_comment(
+            conn, file_id=fid, line_start=1, line_end=2,
+            author="author", body="Reply here",
+            parent_id=parent["id"], file_path="test.md",
+        )
+        conn.close()
+
+        resp = client.get("/api/comments?path=test.md")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 2
+
+        # Required fields per issue spec
+        required_fields = {"id", "parent_id", "author", "body",
+                           "line_start", "line_end", "created_at"}
+        for comment in data:
+            assert required_fields.issubset(comment.keys()), \
+                f"Missing fields: {required_fields - comment.keys()}"
+
+        # parent_id is set on the reply
+        reply = [c for c in data if c["parent_id"] is not None]
+        assert len(reply) == 1
+        assert reply[0]["parent_id"] == parent["id"]
+
+    def test_missing_path_returns_422(self, client):
+        resp = client.get("/api/comments")
+        assert resp.status_code == 422
+
+    def test_nonexistent_file_returns_404(self, client):
+        resp = client.get("/api/comments?path=nonexistent.md")
+        assert resp.status_code == 404
+
+    def test_path_traversal_blocked(self, client):
+        resp = client.get("/api/comments?path=../../../etc/passwd")
+        assert resp.status_code in (403, 404)
+
+
+class TestPostApiComments:
+    """POST /api/comments accepts JSON, creates comment, returns JSON (#435)."""
+
+    def test_create_comment_returns_json(self, client, source_dir):
+        from file_id import derive_file_id
+
+        file_path = str(Path(source_dir) / "test.md")
+        fid = derive_file_id(file_path)
+
+        resp = client.post(
+            "/api/comments",
+            json={
+                "file_id": fid,
+                "path": "test.md",
+                "line_start": 1,
+                "line_end": 1,
+                "author": "tester",
+                "body": "A JSON comment",
+            },
+        )
+        assert resp.status_code == 201
+        assert resp.headers["content-type"].startswith("application/json")
+        data = resp.json()
+        assert data["body"] == "A JSON comment"
+        assert data["author"] == "tester"
+        assert data["id"] is not None
+        assert "created_at" in data
+
+    def test_create_comment_with_parent_id(self, client, source_dir):
+        from db import create_comment, get_connection, init_db
+        from file_id import derive_file_id
+
+        file_path = str(Path(source_dir) / "test.md")
+        fid = derive_file_id(file_path)
+
+        db_path = Path(source_dir) / "test_comments.db"
+        conn = get_connection(db_path)
+        init_db(conn)
+        parent = create_comment(
+            conn, file_id=fid, line_start=1, line_end=1,
+            author="alice", body="Parent", file_path="test.md",
+        )
+        conn.close()
+
+        resp = client.post(
+            "/api/comments",
+            json={
+                "file_id": fid,
+                "path": "test.md",
+                "line_start": 1,
+                "line_end": 1,
+                "author": "bob",
+                "body": "Reply via API",
+                "parent_id": parent["id"],
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["parent_id"] == parent["id"]
+
+    def test_comment_visible_via_get_after_post(self, client, source_dir):
+        from file_id import derive_file_id
+
+        file_path = str(Path(source_dir) / "test.md")
+        fid = derive_file_id(file_path)
+
+        client.post(
+            "/api/comments",
+            json={
+                "file_id": fid,
+                "path": "test.md",
+                "line_start": 1,
+                "line_end": 1,
+                "author": "tester",
+                "body": "Roundtrip test",
+            },
+        )
+
+        resp = client.get("/api/comments?path=test.md")
+        assert resp.status_code == 200
+        data = resp.json()
+        bodies = [c["body"] for c in data]
+        assert "Roundtrip test" in bodies
+
+    def test_default_author(self, client, source_dir):
+        from file_id import derive_file_id
+
+        file_path = str(Path(source_dir) / "test.md")
+        fid = derive_file_id(file_path)
+
+        resp = client.post(
+            "/api/comments",
+            json={
+                "file_id": fid,
+                "path": "test.md",
+                "line_start": 1,
+                "line_end": 1,
+                "body": "No author",
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["author"] == "anon"
+
+    def test_missing_required_fields_returns_422(self, client):
+        resp = client.post("/api/comments", json={"body": "incomplete"})
+        assert resp.status_code == 422
+
+    def test_does_not_redirect(self, client, source_dir):
+        """POST /api/comments must return JSON, not a 303 redirect."""
+        from file_id import derive_file_id
+
+        file_path = str(Path(source_dir) / "test.md")
+        fid = derive_file_id(file_path)
+
+        resp = client.post(
+            "/api/comments",
+            json={
+                "file_id": fid,
+                "path": "test.md",
+                "line_start": 1,
+                "line_end": 1,
+                "body": "No redirect",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 201
+        assert resp.headers["content-type"].startswith("application/json")

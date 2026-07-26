@@ -15,7 +15,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
@@ -339,6 +340,61 @@ async def unresolve(comment_id: int, path: str = Form(...)):
     finally:
         conn.close()
     return RedirectResponse(url=f"/view?path={quote(path)}", status_code=303)
+
+
+# ── JSON API (#435) ───────────────────────────────────────────────────
+
+
+@app.get("/api/comments")
+async def api_get_comments(path: str = Query(...)):
+    """Return JSON list of comments for a file."""
+    _resolve_file(path)  # validates path is inside source root, returns 403/404
+    conn = _conn()
+    try:
+        comments = list_comments_by_path(conn, path)
+        fid = derive_file_id(str(_resolve_file(path)))
+        seen_ids = {c["id"] for c in comments}
+        legacy = [
+            c for c in list_comments(conn, fid)
+            if c["file_path"] is None and c["id"] not in seen_ids
+        ]
+        comments = comments + legacy
+        comments.sort(key=lambda c: (c["line_start"], c["created_at"]))
+    finally:
+        conn.close()
+    return JSONResponse(content=comments)
+
+
+class _CommentCreate(BaseModel):
+    file_id: str
+    path: str
+    line_start: int
+    line_end: int
+    author: str = "anon"
+    body: str
+    parent_id: int | None = None
+
+
+@app.post("/api/comments", status_code=201)
+async def api_post_comment(payload: _CommentCreate):
+    """Create a comment from a JSON body, return the created comment as JSON."""
+    target = _resolve_file(payload.path)
+    conn = _conn()
+    try:
+        comment = create_comment(
+            conn,
+            file_id=payload.file_id,
+            line_start=payload.line_start,
+            line_end=payload.line_end,
+            author=payload.author,
+            body=payload.body,
+            parent_id=payload.parent_id if payload.parent_id and payload.parent_id > 0 else None,
+            file_path=payload.path,
+            anchor_commit=_git_head_if_clean(target),
+        )
+    finally:
+        conn.close()
+    return JSONResponse(content=comment, status_code=201)
 
 
 # ── Entrypoint ──────────────────────────────────────────────────────────
