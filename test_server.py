@@ -815,3 +815,74 @@ class TestAnchorMigration:
         assert row["line_start"] == 5
         assert row["line_end"] == 5
         assert row["anchor_commit"] is None
+
+
+class TestReplyLabel:
+    """Display-only 'reply' label on comments with parent_id (#436).
+
+    When a block has >=1 comment and another comment is attached to the same
+    block with parent_id set, the later comment should render with a 'reply'
+    label/tag. This is purely a display change — no schema or data changes.
+    """
+
+    def test_app_js_renders_reply_badge_for_parent_id(self, client):
+        """app.js must contain logic to render a reply badge when parent_id is set."""
+        resp = client.get("/static/app.js")
+        assert resp.status_code == 200
+        assert "reply-badge" in resp.text, \
+            "app.js must render a reply-badge element for comments with parent_id"
+
+    def test_css_contains_reply_badge_style(self, client):
+        """style.css must style the reply-badge element."""
+        resp = client.get("/static/style.css")
+        assert resp.status_code == 200
+        assert ".reply-badge" in resp.text, \
+            "style.css must contain a .reply-badge rule"
+
+    def test_parent_id_available_in_comments_data_for_reply(self, client, source_dir):
+        """Comments with parent_id must include that field in the embedded JSON so
+        the frontend can render the reply badge."""
+        import json
+        import re
+        import time
+
+        from db import create_comment, get_connection, init_db
+        from file_id import derive_file_id
+
+        file_path = str(Path(source_dir) / "test.md")
+        fid = derive_file_id(file_path)
+
+        db_path = Path(source_dir) / "test_comments.db"
+        conn = get_connection(db_path)
+        init_db(conn)
+
+        parent = create_comment(
+            conn, file_id=fid, line_start=1, line_end=1,
+            author="alice", body="Parent comment",
+        )
+        time.sleep(0.05)
+        create_comment(
+            conn, file_id=fid, line_start=1, line_end=1,
+            author="bob", body="Reply to parent",
+            parent_id=parent["id"],
+        )
+        conn.close()
+
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+
+        comments_data_match = re.search(
+            r'id="comments-data"[^>]*>(.*?)</script>', resp.text, re.DOTALL
+        )
+        assert comments_data_match
+        comments_data = json.loads(comments_data_match.group(1))
+
+        block_comments = comments_data.get("1", [])
+        assert len(block_comments) == 2, \
+            f"Expected 2 comments in block, got {len(block_comments)}"
+
+        # The reply comment must have parent_id set
+        reply_comments = [c for c in block_comments if c.get("parent_id")]
+        assert len(reply_comments) == 1, \
+            "Expected exactly one comment with parent_id set"
+        assert reply_comments[0]["parent_id"] == parent["id"]

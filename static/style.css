@@ -366,6 +366,18 @@ main { padding: 1rem; }
 
 .reply-thread { margin-left: 1rem; border-left: 2px solid var(--border); padding-left: .5rem; }
 
+.comment-card.reply { border-left: 3px solid var(--accent); }
+
+.reply-badge {
+    display: inline-block;
+    background: #dbeafe;
+    color: var(--accent);
+    padding: .1rem .35rem;
+    border-radius: 3px;
+    font-size: .7rem;
+    font-weight: 600;
+}
+
 /* ── Comment form ── */
 .comment-form { margin-top: .5rem; }
 .comment-form label { display: block; margin-bottom: .35rem; font-size: .85rem; }

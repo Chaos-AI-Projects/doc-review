@@ -148,9 +148,14 @@
 
     function commentCardHtml(c) {
         var cls = "comment-card" + (c.resolved ? " resolved" : "");
+        if (c.parent_id) cls += " reply";
         var html = '<div class="' + cls + '">';
+        html += '<div class="comment-meta">';
+        if (c.parent_id) {
+            html += '<span class="reply-badge">reply</span> ';
+        }
         html +=
-            '<div class="comment-meta"><strong>' +
+            "<strong>" +
             escapeHtml(c.author) +
             "</strong> &middot; L" +
             c.line_start +
