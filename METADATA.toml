@@ -1,0 +1,6 @@
+[project]
+name = "doc-review"
+
+[[actions]]
+name = "subtree-push"
+command = "scripts/subtree-push.sh doc-review"
