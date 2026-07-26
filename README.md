@@ -42,7 +42,7 @@ doc-review/
 ├── test_file_id.py    # File ID derivation tests
 ├── test_renderer.py   # Renderer tests
 ├── test_server.py     # Route-level tests
-└── CLAUDE.md          # This file
+└── README.md          # This file
 ```
 
 ## Assumptions
