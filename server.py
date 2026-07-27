@@ -7,6 +7,8 @@ Serves on 127.0.0.1:28080 by default (override with --host / --port).
 """
 
 import argparse
+import functools
+import hashlib
 import json
 import os
 import re
@@ -49,6 +51,31 @@ def _safe_tojson(value: object) -> Markup:
 
 
 templates.env.filters["safe_tojson"] = _safe_tojson
+
+
+@functools.cache
+def static_version(filename: str) -> str:
+    """Return an 8-char content hash for a file under static/.
+
+    Results are cached for the process lifetime.  A server restart is
+    required after deploying new static assets so the hashes update.
+    """
+    path = (BASE_DIR / "static" / filename).resolve()
+    if not path.is_relative_to(BASE_DIR / "static"):
+        raise ValueError(f"Illegal static filename: {filename}")
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:8]
+
+
+templates.env.globals["static_version"] = static_version
+
+
+@app.middleware("http")
+async def add_static_cache_control(request: Request, call_next):
+    """Add Cache-Control: no-cache to /static responses."""
+    response = await call_next(request)
+    if request.url.path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 # Globals set by configure()
 _db_path: str = "comments.db"

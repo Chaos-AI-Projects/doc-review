@@ -88,7 +88,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v={{ static_version('app.js') }}"></script>
 <script type="module">
 // Initialize mermaid diagrams if any .mermaid containers exist.
 if (document.querySelector('.mermaid')) {

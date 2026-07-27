@@ -1169,3 +1169,75 @@ class TestCollapseDirectoryTree:
         )
         assert result.returncode == 0, \
             f"Behavioral tree-collapse test failed:\n{result.stderr}"
+
+
+class TestStaticCacheBusting:
+    """Tests for cache-busting versioned asset URLs and Cache-Control headers."""
+
+    def test_static_js_has_cache_control(self, client):
+        """GET /static/app.js must include Cache-Control containing no-cache."""
+        resp = client.get("/static/app.js")
+        assert resp.status_code == 200
+        cc = resp.headers.get("cache-control", "")
+        assert "no-cache" in cc, (
+            f"Expected Cache-Control to contain 'no-cache', got '{cc}'"
+        )
+
+    def test_static_css_has_cache_control(self, client):
+        """GET /static/style.css must include Cache-Control containing no-cache."""
+        resp = client.get("/static/style.css")
+        assert resp.status_code == 200
+        cc = resp.headers.get("cache-control", "")
+        assert "no-cache" in cc, (
+            f"Expected Cache-Control to contain 'no-cache', got '{cc}'"
+        )
+
+    def test_static_version_stable_for_same_content(self):
+        """static_version returns a stable hash for identical file content."""
+        from server import static_version
+        h1 = static_version("app.js")
+        static_version.cache_clear()
+        h2 = static_version("app.js")
+        assert h1 == h2
+        assert len(h1) == 8, "Hash should be 8 hex characters"
+
+    def test_static_version_rejects_path_traversal(self):
+        """static_version must reject filenames that escape the static/ dir."""
+        from server import static_version
+        with pytest.raises(ValueError, match="Illegal static filename"):
+            static_version("../server.py")
+
+    def test_static_version_changes_on_content_change(self):
+        """static_version returns different hash when file content differs."""
+        from server import static_version, BASE_DIR
+        original = (BASE_DIR / "static" / "app.js").read_bytes()
+        h1 = static_version("app.js")
+        try:
+            (BASE_DIR / "static" / "app.js").write_bytes(original + b"\n// changed")
+            # Clear any cache so the new content is picked up
+            static_version.cache_clear()
+            h2 = static_version("app.js")
+        finally:
+            (BASE_DIR / "static" / "app.js").write_bytes(original)
+            static_version.cache_clear()
+        assert h1 != h2, "Hash must change when file content changes"
+
+    def test_view_page_has_versioned_app_js(self, client):
+        """Rendered /view page must reference app.js with ?v=<hash> query."""
+        from server import static_version
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        expected_hash = static_version("app.js")
+        assert f"/static/app.js?v={expected_hash}" in resp.text, (
+            "app.js script tag must include versioned query string"
+        )
+
+    def test_index_page_has_versioned_style_css(self, client):
+        """Rendered index page must reference style.css with ?v=<hash> query."""
+        from server import static_version
+        resp = client.get("/")
+        assert resp.status_code == 200
+        expected_hash = static_version("style.css")
+        assert f"/static/style.css?v={expected_hash}" in resp.text, (
+            "style.css link tag must include versioned query string"
+        )
