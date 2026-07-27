@@ -1108,3 +1108,64 @@ class TestPostApiComments:
         )
         assert resp.status_code == 201
         assert resp.headers["content-type"].startswith("application/json")
+
+
+# ── Collapse directory tree by default (#439) ───────────────────────────
+
+
+class TestCollapseDirectoryTree:
+    """Directory tree collapses by default; only current file's ancestor
+    directories auto-expand (#439).
+
+    renderTree must thread a directory-path prefix through its recursion and
+    set details.open only when the directory is an ancestor of currentPath.
+    """
+
+    def test_app_js_no_unconditional_details_open(self, client):
+        """app.js must NOT hardcode details.open = true unconditionally."""
+        resp = client.get("/static/app.js")
+        assert resp.status_code == 200
+        src = resp.text
+        # The old line `details.open = true;` (unconditional) must be gone.
+        # A conditional open (e.g. details.open = <expr>) is fine.
+        import re
+        unconditional = re.findall(r'details\.open\s*=\s*true\s*;', src)
+        assert len(unconditional) == 0, \
+            "app.js must not unconditionally set details.open = true"
+
+    def test_app_js_contains_ancestor_path_logic(self, client):
+        """app.js must compute ancestor paths and conditionally open dirs."""
+        resp = client.get("/static/app.js")
+        assert resp.status_code == 200
+        src = resp.text
+        # renderTree must accept a prefix/dirPath parameter
+        assert "currentPath" in src, \
+            "app.js must reference currentPath for ancestor logic"
+        # The open logic must check startsWith for ancestor match
+        assert "startsWith" in src or "indexOf" in src, \
+            "app.js must use startsWith or indexOf to check ancestor paths"
+        # Must compute a directory path by joining prefix and dirName
+        assert "dirPath" in src or "prefix" in src, \
+            "app.js must thread a directory path prefix through renderTree"
+
+    def test_app_js_renderTree_passes_prefix(self, client):
+        """renderTree recursive call must pass the accumulated directory path."""
+        resp = client.get("/static/app.js")
+        assert resp.status_code == 200
+        src = resp.text
+        import re
+        # The initial call should pass an empty prefix
+        assert re.search(r'renderTree\(tree,\s*navTreeEl,\s*""\)', src), \
+            "Initial renderTree call must pass empty string as prefix"
+        # The recursive call should pass the computed dirPath
+        assert re.search(r'renderTree\(node\[', src), \
+            "Recursive renderTree must pass the child node"
+
+    def test_ancestor_logic_behavioral(self):
+        """Run the Node.js behavioral test for the ancestor-open logic."""
+        result = subprocess.run(
+            ["node", str(Path(__file__).parent / "test_tree_collapse.js")],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, \
+            f"Behavioral tree-collapse test failed:\n{result.stderr}"

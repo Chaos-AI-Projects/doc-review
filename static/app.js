@@ -72,7 +72,7 @@
         return root;
     }
 
-    function renderTree(node, container) {
+    function renderTree(node, container, prefix) {
         var dirs = [];
         var key;
         for (key in node) {
@@ -83,16 +83,18 @@
         dirs.sort();
         for (var d = 0; d < dirs.length; d++) {
             var dirName = dirs[d];
+            var dirPath = prefix ? prefix + "/" + dirName : dirName;
             var details = document.createElement("details");
             details.className = "nav-dir";
-            details.open = true;
+            details.open = currentPath === dirPath ||
+                currentPath.indexOf(dirPath + "/") === 0;
             var summary = document.createElement("summary");
             summary.className = "nav-dir-name";
             summary.textContent = dirName + "/";
             details.appendChild(summary);
             var inner = document.createElement("div");
             inner.className = "nav-dir-children";
-            renderTree(node[dirName], inner);
+            renderTree(node[dirName], inner, dirPath);
             details.appendChild(inner);
             container.appendChild(details);
         }
@@ -121,14 +123,14 @@
     }
 
     var tree = buildTree(allFiles);
-    renderTree(tree, navTreeEl);
+    renderTree(tree, navTreeEl, "");
 
     if (navFilterEl) {
         navFilterEl.addEventListener("input", function () {
             var q = navFilterEl.value.toLowerCase();
             navTreeEl.innerHTML = "";
             if (q === "") {
-                renderTree(buildTree(allFiles), navTreeEl);
+                renderTree(buildTree(allFiles), navTreeEl, "");
             } else {
                 var filtered = allFiles.filter(function (f) {
                     return f.toLowerCase().indexOf(q) !== -1;
