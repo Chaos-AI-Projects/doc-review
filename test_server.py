@@ -1241,3 +1241,72 @@ class TestStaticCacheBusting:
         assert f"/static/style.css?v={expected_hash}" in resp.text, (
             "style.css link tag must include versioned query string"
         )
+
+
+# ── Pyodide spike endpoints (#443) ────────────────────────────────────────
+
+
+class TestSpikeRenderAPI:
+    def test_render_api_returns_block_ranges(self, client):
+        resp = client.post("/api/render", json={"source": "# Hello\n\nWorld."})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "blocks" in data
+        assert len(data["blocks"]) == 2
+        assert data["blocks"][0] == {"start_line": 1, "end_line": 1}
+        assert data["blocks"][1] == {"start_line": 3, "end_line": 3}
+
+    def test_render_api_empty_source(self, client):
+        resp = client.post("/api/render", json={"source": ""})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["blocks"]) == 1
+
+    def test_parity_fixture_endpoint(self, client):
+        resp = client.get("/api/parity-fixture")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "source" in data
+        assert "expected_ranges" in data
+        assert len(data["expected_ranges"]) > 0
+        assert "start_line" in data["expected_ranges"][0]
+        assert "end_line" in data["expected_ranges"][0]
+
+
+class TestSpikePreview:
+    def test_spike_preview_page_loads(self, client):
+        resp = client.get("/spike/preview")
+        assert resp.status_code == 200
+        assert "Pyodide" in resp.text
+
+    def test_renderer_source_endpoint(self, client):
+        resp = client.get("/spike/renderer.py")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "source" in data
+        assert "render_markdown_blocks" in data["source"]
+
+
+class TestBlameAPI:
+    def test_blame_untracked_file_returns_404(self, client):
+        """Blame on a non-git-tracked file returns 404."""
+        resp = client.get("/api/blame?path=test.md")
+        assert resp.status_code == 404
+
+    def test_blame_nonexistent_file_returns_404(self, client):
+        resp = client.get("/api/blame?path=no_such_file.md")
+        assert resp.status_code == 404
+
+    def test_blame_tracked_file_returns_lines(self, git_client):
+        """Blame on a git-tracked file returns per-line blame data."""
+        resp = git_client.get("/api/blame?path=doc.md")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "lines" in data
+        assert len(data["lines"]) > 0
+        first = data["lines"][0]
+        assert "line" in first
+        assert "commit" in first
+        assert "author" in first
+        assert "content" in first
+        assert first["author"] == "Test"

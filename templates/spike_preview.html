@@ -1,0 +1,256 @@
+{% extends "base.html" %}
+{% block title %}doc-review — Pyodide Spike Preview{% endblock %}
+{% block content %}
+<div class="spike-header">
+    <h1>Pyodide Spike: In-Browser Markdown Preview</h1>
+    <p class="spike-status" id="status">Loading Pyodide WASM runtime&hellip;</p>
+</div>
+
+<div class="spike-layout">
+    <div class="spike-input">
+        <h2>Markdown Source</h2>
+        <textarea id="md-input" rows="20" placeholder="Type or paste markdown here&hellip;"></textarea>
+        <button id="render-btn" disabled>Render (Pyodide loading&hellip;)</button>
+    </div>
+    <div class="spike-output">
+        <h2>Rendered HTML <small>(browser-side via Pyodide)</small></h2>
+        <div id="rendered-html" class="rendered-preview"></div>
+        <h3>Block Ranges</h3>
+        <pre id="block-ranges"></pre>
+    </div>
+</div>
+
+<div class="spike-section">
+    <h2>Anchor-Parity Check</h2>
+    <p>Renders the canonical test fixture both server-side and in-browser, then
+       compares <code>token.map</code> block&rarr;line ranges for exact match.</p>
+    <button id="parity-btn" disabled>Run Parity Check (Pyodide loading&hellip;)</button>
+    <pre id="parity-result"></pre>
+</div>
+
+<div class="spike-section">
+    <h2>Cold-Boot Timing</h2>
+    <pre id="timing-log"></pre>
+</div>
+
+<div class="spike-section">
+    <h2>Git Blame (server-side API)</h2>
+    <label>File path: <input type="text" id="blame-path" placeholder="e.g. README.md" size="40"></label>
+    <button id="blame-btn">Fetch Blame</button>
+    <pre id="blame-result"></pre>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+.spike-header { margin-bottom: 1rem; }
+.spike-status { font-weight: bold; color: #666; }
+.spike-status.ready { color: #2a7; }
+.spike-status.error { color: #c33; }
+.spike-layout { display: flex; gap: 1rem; margin-bottom: 1.5rem; }
+.spike-input, .spike-output { flex: 1; min-width: 0; }
+.spike-input textarea { width: 100%; font-family: monospace; font-size: 0.9rem; }
+.spike-section { margin-bottom: 1.5rem; }
+.rendered-preview {
+    border: 1px solid #ccc; padding: 0.75rem; min-height: 100px;
+    background: #fafafa; overflow: auto; max-height: 400px;
+}
+#block-ranges, #parity-result, #timing-log, #blame-result {
+    background: #f5f5f5; padding: 0.5rem; overflow: auto;
+    max-height: 300px; font-size: 0.85rem;
+}
+.parity-pass { color: #2a7; font-weight: bold; }
+.parity-fail { color: #c33; font-weight: bold; }
+@media (max-width: 768px) {
+    .spike-layout { flex-direction: column; }
+}
+</style>
+
+<script type="module">
+// ── Cold-boot timing ────────────────────────────────────────────────────
+const t0 = performance.now();
+const timingLog = document.getElementById('timing-log');
+function logTiming(label) {
+    const elapsed = (performance.now() - t0).toFixed(0);
+    timingLog.textContent += `[${elapsed}ms] ${label}\n`;
+}
+logTiming('Page script started');
+
+// ── Load Pyodide ────────────────────────────────────────────────────────
+const statusEl = document.getElementById('status');
+const renderBtn = document.getElementById('render-btn');
+const parityBtn = document.getElementById('parity-btn');
+
+let pyodide = null;
+let renderBlocks = null; // Python callable once loaded
+
+async function initPyodide() {
+    try {
+        logTiming('Pyodide download starting');
+        const pyodideModule = await import('https://cdn.jsdelivr.net/pyodide/v0.27.7/full/pyodide.mjs');
+        logTiming('Pyodide JS module loaded');
+
+        pyodide = await pyodideModule.loadPyodide({
+            indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.27.7/full/',
+        });
+        logTiming('Pyodide runtime ready');
+
+        // Install markdown-it-py (pure Python, available via micropip)
+        await pyodide.loadPackage('micropip');
+        const micropip = pyodide.pyimport('micropip');
+        await micropip.install('markdown-it-py');
+        logTiming('markdown-it-py installed');
+
+        // Fetch renderer.py source from server and load as a module
+        const resp = await fetch('/spike/renderer.py');
+        const data = await resp.json();
+        pyodide.FS.writeFile('/home/pyodide/renderer.py', data.source);
+        pyodide.runPython(`
+import sys
+sys.path.insert(0, '/home/pyodide')
+from renderer import render_markdown_blocks
+`);
+        logTiming('renderer.py loaded in Pyodide');
+
+        // Create a JS-callable wrapper
+        renderBlocks = (source) => {
+            pyodide.globals.set('_source', source);
+            const result = pyodide.runPython(`
+import json
+_blocks = render_markdown_blocks(_source)
+json.dumps(_blocks)
+`);
+            return JSON.parse(result);
+        };
+
+        statusEl.textContent = 'Pyodide ready';
+        statusEl.classList.add('ready');
+        renderBtn.disabled = false;
+        renderBtn.textContent = 'Render';
+        parityBtn.disabled = false;
+        parityBtn.textContent = 'Run Parity Check';
+        logTiming('Pyodide fully initialised — ready for rendering');
+    } catch (err) {
+        statusEl.textContent = `Pyodide failed: ${err.message}`;
+        statusEl.classList.add('error');
+        logTiming(`ERROR: ${err.message}`);
+        console.error(err);
+    }
+}
+
+initPyodide();
+
+// ── Live render ─────────────────────────────────────────────────────────
+const mdInput = document.getElementById('md-input');
+const renderedHtml = document.getElementById('rendered-html');
+const blockRanges = document.getElementById('block-ranges');
+
+renderBtn.addEventListener('click', () => {
+    if (!renderBlocks) return;
+    const source = mdInput.value;
+    try {
+        const blocks = renderBlocks(source);
+        // Display rendered HTML
+        renderedHtml.innerHTML = blocks.map(b => b.html).join('\n');
+        // Display block ranges
+        blockRanges.textContent = blocks.map(
+            b => `lines ${b.start_line}-${b.end_line}: ${b.raw.substring(0, 60).replace(/\n/g, '\\n')}...`
+        ).join('\n');
+    } catch (err) {
+        renderedHtml.textContent = `Render error: ${err.message}`;
+        blockRanges.textContent = '';
+    }
+});
+
+// ── Anchor-parity check ─────────────────────────────────────────────────
+const parityResult = document.getElementById('parity-result');
+
+parityBtn.addEventListener('click', async () => {
+    if (!renderBlocks) return;
+    parityResult.textContent = 'Running parity check...\n';
+
+    try {
+        // Fetch the canonical fixture + expected ranges from the server
+        const resp = await fetch('/api/parity-fixture');
+        const fixture = await resp.json();
+        parityResult.textContent += `Fixture: ${fixture.source.length} chars, ${fixture.expected_ranges.length} expected blocks\n`;
+
+        // Render server-side via /api/render
+        const serverResp = await fetch('/api/render', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({source: fixture.source}),
+        });
+        const serverData = await serverResp.json();
+        const serverRanges = serverData.blocks.map(b => [b.start_line, b.end_line]);
+        parityResult.textContent += `Server-side blocks: ${serverRanges.length}\n`;
+
+        // Render client-side via Pyodide
+        const clientBlocks = renderBlocks(fixture.source);
+        const clientRanges = clientBlocks.map(b => [b.start_line, b.end_line]);
+        parityResult.textContent += `Client-side blocks (Pyodide): ${clientRanges.length}\n\n`;
+
+        // Compare ranges
+        const expectedRanges = fixture.expected_ranges.map(r => [r.start_line, r.end_line]);
+        let allMatch = true;
+        const maxLen = Math.max(serverRanges.length, clientRanges.length, expectedRanges.length);
+
+        parityResult.textContent += 'Block | Expected       | Server         | Pyodide        | Match\n';
+        parityResult.textContent += '------+----------------+----------------+----------------+------\n';
+
+        for (let i = 0; i < maxLen; i++) {
+            const exp = expectedRanges[i] ? `(${expectedRanges[i][0]}, ${expectedRanges[i][1]})` : '—';
+            const srv = serverRanges[i] ? `(${serverRanges[i][0]}, ${serverRanges[i][1]})` : '—';
+            const cli = clientRanges[i] ? `(${clientRanges[i][0]}, ${clientRanges[i][1]})` : '—';
+
+            const srvMatch = JSON.stringify(serverRanges[i]) === JSON.stringify(expectedRanges[i]);
+            const cliMatch = JSON.stringify(clientRanges[i]) === JSON.stringify(expectedRanges[i]);
+            const match = srvMatch && cliMatch;
+            if (!match) allMatch = false;
+
+            parityResult.textContent +=
+                `  ${String(i+1).padStart(2)}  | ${exp.padEnd(14)} | ${srv.padEnd(14)} | ${cli.padEnd(14)} | ${match ? 'OK' : 'MISMATCH'}\n`;
+        }
+
+        parityResult.textContent += '\n';
+        if (allMatch) {
+            parityResult.textContent += 'RESULT: PASS — all block ranges are byte-identical across server and Pyodide\n';
+        } else {
+            parityResult.textContent += 'RESULT: FAIL — block ranges diverged! Pyodide rendering is NOT safe for anchoring.\n';
+        }
+
+        // Style the result
+        parityResult.className = allMatch ? 'parity-pass' : 'parity-fail';
+
+    } catch (err) {
+        parityResult.textContent += `ERROR: ${err.message}\n`;
+        parityResult.className = 'parity-fail';
+    }
+});
+
+// ── Git blame ───────────────────────────────────────────────────────────
+const blamePath = document.getElementById('blame-path');
+const blameBtn = document.getElementById('blame-btn');
+const blameResult = document.getElementById('blame-result');
+
+blameBtn.addEventListener('click', async () => {
+    const path = blamePath.value.trim();
+    if (!path) { blameResult.textContent = 'Enter a file path.'; return; }
+    blameResult.textContent = 'Fetching blame...\n';
+    try {
+        const resp = await fetch(`/api/blame?path=${encodeURIComponent(path)}`);
+        if (!resp.ok) {
+            const err = await resp.json();
+            blameResult.textContent = `Error ${resp.status}: ${err.detail || JSON.stringify(err)}`;
+            return;
+        }
+        const data = await resp.json();
+        blameResult.textContent = data.lines.map(
+            l => `${String(l.line).padStart(4)} | ${l.commit} | ${l.author.padEnd(20)} | ${l.content}`
+        ).join('\n');
+    } catch (err) {
+        blameResult.textContent = `Error: ${err.message}`;
+    }
+});
+</script>
+{% endblock %}

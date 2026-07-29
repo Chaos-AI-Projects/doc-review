@@ -424,6 +424,118 @@ async def api_post_comment(payload: _CommentCreate):
     return JSONResponse(content=comment, status_code=201)
 
 
+# ── Blame JSON API (#443 spike) ──────────────────────────────────────────
+
+@app.get("/api/blame")
+async def api_blame(path: str = Query(...)):
+    """Return per-line git-blame data as JSON for a tracked file.
+
+    Response: ``{"lines": [{"line": int, "commit": str, "author": str,
+    "date": str, "content": str}, ...]}``
+    """
+    target = _resolve_file(path)
+    d = str(target.parent)
+    name = target.name
+    try:
+        result = subprocess.run(
+            ["git", "-C", d, "blame", "--porcelain", "--", name],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        raise HTTPException(status_code=502, detail="git blame unavailable")
+    if result.returncode != 0:
+        raise HTTPException(
+            status_code=404,
+            detail="File is not git-tracked or blame failed",
+        )
+
+    # Parse porcelain output into per-line records.
+    lines: list[dict] = []
+    current_commit = ""
+    commit_meta: dict[str, dict] = {}  # commit -> {author, date}
+    line_num = 0
+    for raw_line in result.stdout.splitlines():
+        m = _BLAME_HEADER_RE.match(raw_line)
+        if m:
+            current_commit = m.group(1)
+            line_num = int(m.group(3))
+            if current_commit not in commit_meta:
+                commit_meta[current_commit] = {"author": "", "date": ""}
+        elif raw_line.startswith("author "):
+            commit_meta[current_commit]["author"] = raw_line[7:]
+        elif raw_line.startswith("author-time "):
+            commit_meta[current_commit]["date"] = raw_line[12:]
+        elif raw_line.startswith("\t"):
+            meta = commit_meta.get(current_commit, {"author": "", "date": ""})
+            lines.append({
+                "line": line_num,
+                "commit": current_commit[:12],
+                "author": meta["author"],
+                "date": meta["date"],
+                "content": raw_line[1:],
+            })
+
+    return JSONResponse(content={"lines": lines})
+
+
+# ── Render / parity-fixture API (#443 spike) ─────────────────────────────
+
+
+@app.post("/api/render")
+async def api_render(request: Request):
+    """Render markdown source and return block ranges as JSON.
+
+    Request body: ``{"source": "<markdown text>"}``
+    Response: ``{"blocks": [{"start_line": int, "end_line": int}, ...]}``
+    """
+    body = await request.json()
+    source = body.get("source", "")
+    blocks = render_markdown_blocks(source)
+    return JSONResponse(content={
+        "blocks": [
+            {"start_line": b["start_line"], "end_line": b["end_line"]}
+            for b in blocks
+        ]
+    })
+
+
+@app.get("/api/parity-fixture")
+async def api_parity_fixture():
+    """Return the canonical parity-test fixture and its expected ranges.
+
+    Used by the Pyodide preview page to run the client-side parity check
+    against the same fixture used by test_parity.py.
+    """
+    from parity_fixture import EXPECTED_RANGES, PARITY_FIXTURE
+
+    return JSONResponse(content={
+        "source": PARITY_FIXTURE,
+        "expected_ranges": [
+            {"start_line": s, "end_line": e} for s, e in EXPECTED_RANGES
+        ],
+    })
+
+
+# ── Pyodide spike preview (#443) ─────────────────────────────────────────
+
+
+@app.get("/spike/preview", response_class=HTMLResponse)
+async def spike_preview(request: Request):
+    """Pyodide-powered in-browser markdown preview (spike page)."""
+    return templates.TemplateResponse(
+        request,
+        "spike_preview.html",
+        context={},
+    )
+
+
+@app.get("/spike/renderer.py")
+async def spike_renderer_source():
+    """Serve renderer.py source for Pyodide to load verbatim."""
+    source = (BASE_DIR / "renderer.py").read_text(encoding="utf-8")
+    return JSONResponse(content={"source": source})
+
+
 # ── Entrypoint ──────────────────────────────────────────────────────────
 
 def main():
