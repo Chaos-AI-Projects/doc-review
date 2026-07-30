@@ -9,6 +9,7 @@
         <button id="nav-col-toggle" class="col-toggle-btn" title="Toggle navigator column">&#9776; Nav</button>
         <button id="comments-col-toggle" class="col-toggle-btn" title="Toggle comments column">&#128172; Comments</button>
     </span>
+    <span id="pyodide-status" class="pyodide-status" title="Renderer loading…">&#9881;</span>
 </div>
 
 <div class="view-layout">
@@ -85,13 +86,19 @@
 <script id="comments-data" type="application/json">
 {{ comments_by_block | safe_tojson }}
 </script>
+
+<!-- Raw markdown source for Pyodide in-browser rendering (#445) -->
+<script id="source-data" type="application/json">
+{{ source | safe_tojson }}
+</script>
 {% endblock %}
 
 {% block scripts %}
 <script src="/static/app.js?v={{ static_version('app.js') }}"></script>
 <script type="module">
-// Initialize mermaid diagrams if any .mermaid containers exist.
-if (document.querySelector('.mermaid')) {
+// ── Mermaid diagram rendering (reusable for re-render after Pyodide) ──
+async function initMermaid() {
+    if (!document.querySelector('.mermaid')) return;
     const m = await import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs');
     m.default.initialize({ startOnLoad: false, theme: 'default' });
     const cells = document.querySelectorAll('td.line-content');
@@ -124,5 +131,67 @@ if (document.querySelector('.mermaid')) {
     }
     await renderGroup();
 }
+
+// Initial mermaid render on server-side content (no-JS fallback path).
+await initMermaid();
+
+// ── Pyodide in-browser renderer (promoted from #443 spike, #445) ──────
+const pyodideStatus = document.getElementById('pyodide-status');
+
+async function initPyodideRenderer() {
+    try {
+        const pyodideModule = await import('https://cdn.jsdelivr.net/pyodide/v0.27.7/full/pyodide.mjs');
+        const pyodide = await pyodideModule.loadPyodide({
+            indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.27.7/full/',
+        });
+        await pyodide.loadPackage('micropip');
+        const micropip = pyodide.pyimport('micropip');
+        await micropip.install('markdown-it-py');
+
+        // Load renderer.py into Pyodide
+        const resp = await fetch('/spike/renderer.py');
+        const data = await resp.json();
+        pyodide.FS.writeFile('/home/pyodide/renderer.py', data.source);
+        pyodide.runPython("import sys; sys.path.insert(0, '/home/pyodide'); from renderer import render_markdown_blocks");
+
+        // Render blocks client-side from embedded raw source
+        const source = JSON.parse(document.getElementById('source-data').textContent);
+        pyodide.globals.set('_source', source);
+        const result = pyodide.runPython("import json; json.dumps(render_markdown_blocks(_source))");
+        const blocks = JSON.parse(result);
+
+        // Build a map from start_line to Pyodide-rendered block
+        const blockMap = {};
+        for (const b of blocks) { blockMap[b.start_line] = b; }
+
+        // Replace server-rendered block content with Pyodide-rendered content
+        for (const row of document.querySelectorAll('tr.source-line')) {
+            const startLine = parseInt(row.getAttribute('data-line-start'), 10);
+            const block = blockMap[startLine];
+            if (block) {
+                const cell = row.querySelector('.line-content');
+                if (cell) cell.innerHTML = block.html;
+            }
+        }
+
+        // Re-initialize mermaid on Pyodide-rendered content
+        await initMermaid();
+
+        if (pyodideStatus) {
+            pyodideStatus.textContent = '\u2714 Pyodide';
+            pyodideStatus.title = 'Rendered in-browser via Pyodide';
+            pyodideStatus.classList.add('ready');
+        }
+    } catch (err) {
+        console.warn('Pyodide renderer unavailable, using server-side fallback:', err);
+        if (pyodideStatus) {
+            pyodideStatus.textContent = 'Server';
+            pyodideStatus.title = 'Rendered server-side (Pyodide unavailable)';
+            pyodideStatus.classList.add('fallback');
+        }
+    }
+}
+
+initPyodideRenderer();
 </script>
 {% endblock %}

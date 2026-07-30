@@ -1310,3 +1310,79 @@ class TestBlameAPI:
         assert "author" in first
         assert "content" in first
         assert first["author"] == "Test"
+
+
+# ── Pyodide promotion to /view (#445) ────────────────────────────────────
+
+
+class TestPyodideViewPromotion:
+    """Pyodide in-browser renderer promoted to /view: raw source embedded,
+    Pyodide CDN referenced, renderer endpoint referenced, server-side
+    blocks retained as fallback (#445)."""
+
+    def test_view_embeds_raw_source(self, client):
+        """View page must embed the raw markdown source for Pyodide."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        assert 'id="source-data"' in resp.text
+
+    def test_raw_source_matches_file_content(self, client, source_dir):
+        """The embedded source-data must match the actual file content."""
+        import json
+        import re
+
+        expected = (Path(source_dir) / "test.md").read_text()
+        resp = client.get("/view?path=test.md")
+        m = re.search(
+            r'id="source-data"[^>]*>(.*?)</script>', resp.text, re.DOTALL
+        )
+        assert m, "Expected source-data script tag"
+        embedded = json.loads(m.group(1))
+        assert embedded == expected
+
+    def test_view_references_pyodide_cdn(self, client):
+        """View page must reference the Pyodide CDN for in-browser rendering."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        assert "pyodide" in resp.text.lower()
+
+    def test_view_references_renderer_endpoint(self, client):
+        """View page must reference /spike/renderer.py for Pyodide to fetch."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        assert "/spike/renderer.py" in resp.text
+
+    def test_view_still_has_server_rendered_blocks(self, client):
+        """Server-side rendered blocks remain as no-JS fallback."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        # The test file has "# Hello" which renders to <h1>Hello</h1>
+        assert "<h1>" in resp.text
+        assert "Hello" in resp.text
+        assert 'class="line-content"' in resp.text
+
+    def test_view_has_pyodide_status_indicator(self, client):
+        """View page must contain a status indicator for Pyodide readiness."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        assert 'id="pyodide-status"' in resp.text
+
+    def test_existing_features_preserved_with_source(self, client):
+        """All existing /view features still present after adding source embed."""
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        # Block anchors
+        assert 'id="L1"' in resp.text
+        assert 'data-line-start="1"' in resp.text
+        # Comments data
+        assert 'id="comments-data"' in resp.text
+        # File navigator
+        assert 'class="file-nav"' in resp.text
+        assert 'id="files-data"' in resp.text
+        # TOC
+        assert 'class="toc-section"' in resp.text
+        # Column toggles
+        assert 'id="nav-col-toggle"' in resp.text
+        assert 'id="comments-col-toggle"' in resp.text
+        # Comment form template
+        assert 'id="comment-form-tpl"' in resp.text

@@ -308,6 +308,7 @@ async def view_file(request: Request, path: str = Query(...)):
             "toc": toc,
             "comments_by_block": comments_by_block,
             "files": all_files,
+            "source": source,
         },
     )
     resp.headers["Cache-Control"] = "no-store"
