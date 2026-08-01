@@ -1386,3 +1386,296 @@ class TestPyodideViewPromotion:
         assert 'id="comments-col-toggle"' in resp.text
         # Comment form template
         assert 'id="comment-form-tpl"' in resp.text
+
+
+# ── SPA file switching: /api/source + client-side nav (#447) ─────────────
+
+
+def _api_source(client, path="test.md"):
+    return client.get(f"/api/source?path={path}")
+
+
+class TestApiSource:
+    """GET /api/source returns the same payload /view builds, as JSON (#447)."""
+
+    def test_returns_200_and_json(self, client):
+        resp = _api_source(client)
+        assert resp.status_code == 200
+        assert "application/json" in resp.headers["content-type"]
+
+    def test_payload_shape(self, client):
+        data = _api_source(client).json()
+        assert set(data) == {
+            "path", "file_id", "source", "toc", "comments_by_block"
+        }
+        assert data["path"] == "test.md"
+        assert isinstance(data["file_id"], str) and data["file_id"]
+        assert isinstance(data["toc"], list)
+        assert isinstance(data["comments_by_block"], dict)
+
+    def test_source_matches_file_content(self, client, source_dir):
+        expected = (Path(source_dir) / "test.md").read_text()
+        assert _api_source(client).json()["source"] == expected
+
+    def test_file_id_matches_view(self, client, source_dir):
+        from file_id import derive_file_id
+
+        expected = derive_file_id(str(Path(source_dir) / "test.md"))
+        assert _api_source(client).json()["file_id"] == expected
+
+    def test_toc_matches_renderer(self, client, source_dir):
+        from renderer import extract_toc
+
+        expected = extract_toc((Path(source_dir) / "test.md").read_text())
+        assert _api_source(client).json()["toc"] == expected
+
+    def test_nested_file(self, client):
+        data = _api_source(client, "sub/nested.md").json()
+        assert data["path"] == "sub/nested.md"
+        assert "Nested content." in data["source"]
+
+    def test_path_traversal_blocked(self, client):
+        resp = client.get("/api/source?path=../../etc/passwd")
+        assert resp.status_code == 403
+
+    def test_nonexistent_file_returns_404(self, client):
+        resp = client.get("/api/source?path=does_not_exist.md")
+        assert resp.status_code == 404
+
+    def test_missing_path_returns_422(self, client):
+        assert client.get("/api/source").status_code == 422
+
+    def test_cache_control_no_store(self, client):
+        resp = _api_source(client)
+        assert "no-store" in resp.headers.get("cache-control", "")
+
+    def test_comments_by_block_matches_view(self, client, source_dir):
+        from file_id import derive_file_id
+
+        fid = derive_file_id(str(Path(source_dir) / "test.md"))
+        client.post(
+            "/comment",
+            data={
+                "file_id": fid, "path": "test.md",
+                "line_start": "1", "line_end": "1",
+                "author": "reviewer", "body": "api-source comment",
+                "parent_id": "0",
+            },
+            follow_redirects=False,
+        )
+        view_data = _comments_data(client.get("/view?path=test.md").text)
+        api_data = _api_source(client).json()["comments_by_block"]
+        assert api_data == view_data
+        bodies = [c["body"] for cs in api_data.values() for c in cs]
+        assert "api-source comment" in bodies
+
+    def test_legacy_null_path_comments_included(self, client, source_dir):
+        """Legacy rows (file_path NULL) matching the content id are merged,
+        exactly as /view does."""
+        from db import create_comment, get_connection, init_db
+        from file_id import derive_file_id
+
+        fid = derive_file_id(str(Path(source_dir) / "test.md"))
+        conn = get_connection(Path(source_dir) / "test_comments.db")
+        init_db(conn)
+        create_comment(
+            conn, file_id=fid, line_start=1, line_end=1,
+            author="old-timer", body="legacy api comment",
+        )
+        conn.close()
+
+        api_data = _api_source(client).json()["comments_by_block"]
+        bodies = [c["body"] for cs in api_data.values() for c in cs]
+        assert "legacy api comment" in bodies
+
+    def test_shares_payload_builder_with_view(self, client, monkeypatch):
+        """Anti-drift: both /view and /api/source must go through the single
+        shared payload builder."""
+        import server
+
+        calls = []
+        original = server.build_view_payload
+
+        def spy(path):
+            calls.append(path)
+            return original(path)
+
+        monkeypatch.setattr(server, "build_view_payload", spy)
+        assert client.get("/view?path=test.md").status_code == 200
+        assert calls == ["test.md"]
+        assert _api_source(client).status_code == 200
+        assert calls == ["test.md", "test.md"]
+
+    def test_payload_identical_to_builder_output(self, client, source_dir):
+        """The JSON payload is exactly the shared builder's output, minus the
+        server-render-only ``blocks`` key."""
+        import json
+
+        import server
+
+        payload = server.build_view_payload("test.md")
+        assert "blocks" in payload, "builder must also supply server-side blocks"
+        expected = {
+            k: v for k, v in payload.items()
+            if k in {"path", "file_id", "source", "toc", "comments_by_block"}
+        }
+        # JSON round-trip normalises int block keys to strings.
+        assert _api_source(client).json() == json.loads(json.dumps(expected))
+
+
+class TestApiSourceAnchorParity:
+    """/api/source performs the same anchor re-migration as /view (#406/#447)."""
+
+    def test_migrates_anchors_like_view(self, git_client, git_source_dir):
+        _post_comment(git_client, git_source_dir, 5, 5, "on para two")
+        md = Path(git_source_dir) / "doc.md"
+        md.write_text("intro\n\n" + GIT_DOC)  # para two shifts 5 → 7
+        _git(git_source_dir, "commit", "-qam", "prepend intro")
+        new_head = _git(git_source_dir, "rev-parse", "HEAD")
+
+        data = git_client.get("/api/source?path=doc.md").json()
+        bodies = [c["body"] for c in data["comments_by_block"].get("7", [])]
+        assert "on para two" in bodies, f"not re-anchored: {data['comments_by_block']}"
+
+        row = _db_comment(git_source_dir, "on para two")
+        assert (row["line_start"], row["line_end"]) == (7, 7)
+        assert row["anchor_commit"] == new_head
+
+    def test_dirty_tree_skips_migration(self, git_client, git_source_dir):
+        _post_comment(git_client, git_source_dir, 5, 5, "dirty api comment")
+        old_head = _git(git_source_dir, "rev-parse", "HEAD")
+        (Path(git_source_dir) / "doc.md").write_text("intro\n\n" + GIT_DOC)
+
+        assert git_client.get("/api/source?path=doc.md").status_code == 200
+
+        row = _db_comment(git_source_dir, "dirty api comment")
+        assert (row["line_start"], row["line_end"]) == (5, 5)
+        assert row["anchor_commit"] == old_head
+
+
+class TestSpaClientNavigation:
+    """static/app.js soft-navigates between files without reloading (#447)."""
+
+    def _app_js(self, client):
+        return client.get("/static/app.js").text
+
+    def _nav_logic_js(self, client):
+        return client.get("/static/nav_logic.js").text
+
+    def test_nav_logic_asset_is_served(self, client):
+        resp = client.get("/static/nav_logic.js")
+        assert resp.status_code == 200
+
+    def test_view_loads_nav_logic_before_app_js(self, client):
+        """The shared logic module must be in scope when app.js runs."""
+        html = client.get("/view?path=test.md").text
+        assert "/static/nav_logic.js" in html
+        assert html.index("/static/nav_logic.js") < html.index("/static/app.js")
+
+    def test_nav_logic_is_versioned(self, client):
+        """Cache busting applies to the new asset too (#442)."""
+        import re
+
+        html = client.get("/view?path=test.md").text
+        assert re.search(r"/static/nav_logic\.js\?v=[0-9a-f]{8}", html)
+
+    def test_app_js_uses_shared_nav_logic(self, client):
+        """app.js must consume the tested module rather than re-implement it."""
+        js = self._app_js(client)
+        assert "docReviewNavLogic" in js
+        for fn in (
+            "navLogic.sourceRowSpecs", "navLogic.tocItemSpecs",
+            "navLogic.headerFields", "navLogic.shouldIntercept",
+            "navLogic.popstateAction", "navLogic.lineAnchorId",
+            "navLogic.apiSourceUrl", "navLogic.viewUrl",
+        ):
+            assert fn in js, f"app.js does not use {fn}"
+
+    def test_app_js_does_not_duplicate_nav_logic(self, client):
+        """Anti-drift: the pure logic is defined once, in nav_logic.js."""
+        js = self._app_js(client)
+        for fn in (
+            "function viewUrl(", "function apiSourceUrl(",
+            "function shouldIntercept(", "function popstateAction(",
+            "function lineAnchorId(",
+        ):
+            assert fn not in js, f"app.js redefines {fn} — must reuse nav_logic.js"
+
+    def test_nav_logic_fetches_api_source(self, client):
+        assert "/api/source?path=" in self._nav_logic_js(client)
+
+    def test_app_js_uses_pushstate_and_popstate(self, client):
+        js = self._app_js(client)
+        assert "history.pushState" in js
+        assert "popstate" in js
+
+    def test_keeps_path_query_url_scheme(self, client):
+        """URL scheme stays ?path= — no hash routing (#447 non-goal)."""
+        assert '"/view?path=" + encodeURIComponent' in self._nav_logic_js(client)
+        assert "location.hash = " not in self._app_js(client)
+
+    def test_app_js_nav_links_keep_href_fallback(self, client):
+        """Anchors keep a real href so no-JS / failed-fetch clicks still do a
+        full-page navigation."""
+        js = self._app_js(client)
+        assert 'a.href = "/view?path="' in js
+
+    def test_app_js_guards_on_renderer_availability(self, client):
+        """Interception only happens when the warm Pyodide renderer handle is
+        present; otherwise the click falls through."""
+        js = self._app_js(client)
+        assert "docReviewRenderer" in js
+        assert "preventDefault" in js
+
+    def test_app_js_restores_line_anchor_after_swap(self, client):
+        """Back/Forward onto a #L42 deep link must land on that block."""
+        js = self._app_js(client)
+        assert "navLogic.lineAnchorId(window.location.hash)" in js
+        assert "scrollIntoView()" in js
+
+    def test_app_js_sequences_concurrent_swaps(self, client):
+        """A slow response must not clobber a newer navigation."""
+        js = self._app_js(client)
+        assert "navSeq" in js
+        assert "seq !== navSeq" in js
+
+    def test_app_js_updates_comment_form_target(self, client):
+        """Comments must be posted against the file currently on screen."""
+        js = self._app_js(client)
+        assert 'tpl.querySelector(\'[name="file_id"]\').value' in js
+        assert 'tpl.querySelector(\'[name="path"]\').value' in js
+
+    def test_view_exposes_renderer_handle(self, client):
+        """view.html must publish the warm Pyodide runtime so app.js can
+        re-render without re-booting it."""
+        html = client.get("/view?path=test.md").text
+        assert "docReviewRenderer" in html
+
+    def test_view_still_server_renders_first_load(self, client):
+        """The server-side render stays live (no-JS fallback from #446)."""
+        html = client.get("/view?path=test.md").text
+        assert 'class="line-content"' in html
+        assert "<h1>" in html
+
+    def test_nav_logic_skips_modified_clicks(self, client):
+        """Ctrl/meta/shift/alt clicks and non-primary buttons must keep their
+        native behaviour (new tab / window)."""
+        js = self._nav_logic_js(client)
+        for guard in ("metaKey", "ctrlKey", "shiftKey", "altKey", "evt.button !== 0"):
+            assert guard in js, f"missing modifier guard: {guard}"
+
+    def test_app_js_falls_back_on_fetch_failure(self, client):
+        """A failed soft swap must end up on the normal /view page."""
+        js = self._app_js(client)
+        assert "catch(" in js.replace(" ", "")
+        assert "window.location.href = navLogic.viewUrl(path)" in js
+        assert "window.location.reload()" in js
+
+    def test_spa_navigation_behavioral(self):
+        """Run the Node.js behavioral test against the shipped nav_logic.js."""
+        result = subprocess.run(
+            ["node", str(Path(__file__).parent / "test_spa_nav.js")],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, \
+            f"Behavioral SPA navigation test failed:\n{result.stderr}"

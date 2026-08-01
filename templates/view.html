@@ -94,6 +94,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/nav_logic.js?v={{ static_version('nav_logic.js') }}"></script>
 <script src="/static/app.js?v={{ static_version('app.js') }}"></script>
 <script type="module">
 // ── Mermaid diagram rendering (reusable for re-render after Pyodide) ──
@@ -154,11 +155,19 @@ async function initPyodideRenderer() {
         pyodide.FS.writeFile('/home/pyodide/renderer.py', data.source);
         pyodide.runPython("import sys; sys.path.insert(0, '/home/pyodide'); from renderer import render_markdown_blocks");
 
+        // Publish the warm runtime so app.js can re-render other files
+        // without re-booting Pyodide (#447).
+        const renderBlocks = (src) => {
+            pyodide.globals.set('_source', src);
+            return JSON.parse(pyodide.runPython(
+                "import json; json.dumps(render_markdown_blocks(_source))"
+            ));
+        };
+        window.docReviewRenderer = { renderBlocks, initMermaid };
+
         // Render blocks client-side from embedded raw source
         const source = JSON.parse(document.getElementById('source-data').textContent);
-        pyodide.globals.set('_source', source);
-        const result = pyodide.runPython("import json; json.dumps(render_markdown_blocks(_source))");
-        const blocks = JSON.parse(result);
+        const blocks = renderBlocks(source);
 
         // Build a map from start_line to Pyodide-rendered block
         const blockMap = {};

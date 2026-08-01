@@ -293,4 +293,229 @@
             }
         }
     });
+
+    /* ── SPA file switching (#447) ──
+     *
+     * Nav-tree clicks fetch /api/source and re-render through the already-warm
+     * Pyodide runtime instead of doing a full page load (which would re-boot
+     * it).  The URL scheme is unchanged (?path=, via history.pushState), and
+     * every failure path falls back to the plain full-page /view navigation,
+     * so the server-side render stays the no-JS / degraded fallback.
+     *
+     * The DOM-free decision/derivation logic lives in static/nav_logic.js so
+     * it can be unit-tested directly (test_spa_nav.js).
+     */
+
+    var navLogic = window.docReviewNavLogic;
+    var sourceBody = document.querySelector("#source tbody");
+    var navSeq = 0;  // guards against a slow response clobbering a newer one
+
+    function warmRenderer() {
+        var r = window.docReviewRenderer;
+        return r && typeof r.renderBlocks === "function" ? r : null;
+    }
+
+    function setLineAttrs(el, spec) {
+        el.setAttribute("data-line-start", spec.startLine);
+        el.setAttribute("data-line-end", spec.endLine);
+    }
+
+    function buildSourceRows(blocks) {
+        var specs = navLogic.sourceRowSpecs(blocks, commentsData);
+        var frag = document.createDocumentFragment();
+        for (var i = 0; i < specs.length; i++) {
+            var spec = specs[i];
+
+            var tr = document.createElement("tr");
+            tr.id = spec.id;
+            tr.className = spec.rowClass;
+            setLineAttrs(tr, spec);
+
+            var num = document.createElement("td");
+            num.className = "line-num";
+            setLineAttrs(num, spec);
+            num.textContent = spec.label;
+            tr.appendChild(num);
+
+            var content = document.createElement("td");
+            content.className = "line-content";
+            setLineAttrs(content, spec);
+            content.innerHTML = spec.html;
+            tr.appendChild(content);
+
+            var marker = document.createElement("td");
+            marker.className = "line-marker";
+            if (spec.commentCount) {
+                var btn = document.createElement("button");
+                btn.className = "marker-btn";
+                setLineAttrs(btn, spec);
+                btn.title = spec.commentCount + " comment(s)";
+                btn.textContent = String(spec.commentCount);
+                marker.appendChild(btn);
+            }
+            tr.appendChild(marker);
+
+            frag.appendChild(tr);
+        }
+        return frag;
+    }
+
+    function renderToc(toc) {
+        if (!fileNav) return;
+        var existing = fileNav.querySelector(".toc-section");
+        if (existing) existing.remove();
+
+        var specs = navLogic.tocItemSpecs(toc);
+        if (!specs.length) return;
+
+        var section = document.createElement("div");
+        section.className = "toc-section";
+        var heading = document.createElement("div");
+        heading.className = "toc-heading";
+        heading.textContent = "Contents";
+        section.appendChild(heading);
+
+        var list = document.createElement("ul");
+        list.className = "toc-list";
+        for (var i = 0; i < specs.length; i++) {
+            var li = document.createElement("li");
+            li.className = specs[i].className;
+            var a = document.createElement("a");
+            a.href = specs[i].href;
+            a.className = "toc-link";
+            a.textContent = specs[i].text;
+            li.appendChild(a);
+            list.appendChild(li);
+        }
+        section.appendChild(list);
+        fileNav.appendChild(section);
+    }
+
+    function updateNavActive() {
+        var links = navTreeEl.querySelectorAll(".file-nav-link");
+        for (var i = 0; i < links.length; i++) {
+            var link = links[i];
+            var active = link.getAttribute("data-path") === currentPath;
+            link.classList.toggle("active", active);
+            if (!active) continue;
+            // Expand the ancestor directories of the newly active file.
+            var parent = link.parentNode;
+            while (parent && parent !== navTreeEl) {
+                if (parent.tagName === "DETAILS") parent.open = true;
+                parent = parent.parentNode;
+            }
+        }
+    }
+
+    function updateHeader(data) {
+        var fields = navLogic.headerFields(data);
+        var title = document.querySelector(".file-header h1");
+        if (title) title.textContent = fields.title;
+        var fidEl = document.querySelector(".file-header .file-id");
+        if (fidEl) fidEl.textContent = fields.fileIdLabel;
+        document.title = fields.documentTitle;
+
+        // Comments must be posted against the file now on screen, not the one
+        // the page was originally served with.
+        var tpl = formTpl.content;
+        tpl.querySelector('[name="file_id"]').value = fields.formFileId;
+        tpl.querySelector('[name="path"]').value = fields.formPath;
+    }
+
+    function setEmbeddedJson(id, value) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = JSON.stringify(value);
+    }
+
+    function applyDocument(data, blocks) {
+        commentsData = data.comments_by_block || {};
+        currentPath = data.path;
+        updateHeader(data);
+        sourceBody.innerHTML = "";
+        sourceBody.appendChild(buildSourceRows(blocks));
+        renderToc(data.toc);
+        updateNavActive();
+        document.querySelectorAll(".inline-comments").forEach(function (el) {
+            el.remove();
+        });
+        sidebar.innerHTML =
+            '<p class="sidebar-hint">Click a block to add a comment.</p>';
+        // Keep the embedded blobs consistent with what is on screen.
+        setEmbeddedJson("comments-data", commentsData);
+        setEmbeddedJson("current-path-data", currentPath);
+        setEmbeddedJson("source-data", data.source);
+    }
+
+    /* Restore the "#L42" line anchor after a swap (Back/Forward onto a deep
+     * link), otherwise start at the top of the new document. */
+    function restoreScroll() {
+        var anchorId = navLogic.lineAnchorId(window.location.hash);
+        var target = anchorId ? document.getElementById(anchorId) : null;
+        if (target) {
+            target.scrollIntoView();
+        } else {
+            window.scrollTo(0, 0);
+        }
+    }
+
+    /* Returns true when a soft swap was started (the caller then suppresses
+     * the default navigation), false when soft navigation is impossible. */
+    function softNavigate(path, push) {
+        var renderer = warmRenderer();
+        if (!renderer || !sourceBody) return false;
+
+        var seq = ++navSeq;
+        fetch(navLogic.apiSourceUrl(path), {
+            headers: { Accept: "application/json" },
+        })
+            .then(function (resp) {
+                if (!resp.ok) throw new Error("HTTP " + resp.status);
+                return resp.json();
+            })
+            .then(function (data) {
+                if (seq !== navSeq) return;  // superseded by a later click
+                applyDocument(data, renderer.renderBlocks(data.source));
+                if (push) {
+                    history.pushState(
+                        { path: path }, "", navLogic.viewUrl(path)
+                    );
+                }
+                restoreScroll();
+                if (typeof renderer.initMermaid === "function") {
+                    renderer.initMermaid();
+                }
+            })
+            .catch(function (err) {
+                if (seq !== navSeq) return;
+                console.warn("Soft navigation failed, falling back:", err);
+                if (push) {
+                    window.location.href = navLogic.viewUrl(path);
+                } else {
+                    window.location.reload();
+                }
+            });
+        return true;
+    }
+
+    if (navLogic) {
+        document.addEventListener("click", function (e) {
+            var link = e.target.closest && e.target.closest("a.file-nav-link");
+            if (!link) return;
+            var path = link.getAttribute("data-path");
+            if (!navLogic.shouldIntercept(e, path, currentPath, warmRenderer())) {
+                return;  // plain href → full-page /view navigation
+            }
+            if (softNavigate(path, true)) e.preventDefault();
+        });
+
+        window.addEventListener("popstate", function (e) {
+            var path = (e.state && e.state.path) || getPath();
+            var action = navLogic.popstateAction(
+                path, currentPath, warmRenderer()
+            );
+            if (action === "ignore") return;  // hash-only change: keep the DOM
+            if (action === "soft" && softNavigate(path, false)) return;
+            window.location.reload();
+        });
+    }
 })();

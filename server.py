@@ -246,9 +246,17 @@ async def index(request: Request):
     return resp
 
 
-@app.get("/view", response_class=HTMLResponse)
-async def view_file(request: Request, path: str = Query(...)):
-    """Render a file with per-line anchors and comments."""
+# Keys of build_view_payload() that /api/source exposes; `blocks` is omitted
+# because the client renders them through its own warm runtime (#447).
+API_SOURCE_KEYS = ("path", "file_id", "source", "toc", "comments_by_block")
+
+
+def build_view_payload(path: str) -> dict:
+    """Build everything needed to present *path*: blocks, TOC, comments.
+
+    Single source of truth shared by ``/view`` (server-side render) and
+    ``/api/source`` (SPA soft navigation, #447) so the two cannot drift.
+    """
     file_path = _resolve_file(path)
     source = file_path.read_text(encoding="utf-8", errors="replace")
     blocks = render_markdown_blocks(source)
@@ -296,20 +304,40 @@ async def view_file(request: Request, path: str = Query(...)):
     finally:
         conn.close()
 
-    all_files = _list_files(_source_root)
+    return {
+        "path": path,
+        "file_id": fid,
+        "source": source,
+        "toc": toc,
+        "comments_by_block": comments_by_block,
+        "blocks": blocks,
+    }
 
+
+@app.get("/view", response_class=HTMLResponse)
+async def view_file(request: Request, path: str = Query(...)):
+    """Render a file with per-line anchors and comments."""
+    payload = build_view_payload(path)
     resp = templates.TemplateResponse(
         request,
         "view.html",
-        context={
-            "path": path,
-            "file_id": fid,
-            "blocks": blocks,
-            "toc": toc,
-            "comments_by_block": comments_by_block,
-            "files": all_files,
-            "source": source,
-        },
+        context={**payload, "files": _list_files(_source_root)},
+    )
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.get("/api/source")
+async def api_source(path: str = Query(...)):
+    """Return the raw source + TOC + comments for a file as JSON (#447).
+
+    Used by the client to switch files without a full page load (which would
+    re-boot the Pyodide runtime).  ``blocks`` are deliberately omitted: the
+    client renders them through its already-warm runtime.
+    """
+    payload = build_view_payload(path)
+    resp = JSONResponse(
+        content={k: payload[k] for k in API_SOURCE_KEYS}
     )
     resp.headers["Cache-Control"] = "no-store"
     return resp
