@@ -6,7 +6,7 @@ Block-anchored markdown review web app. Lets a reviewer read markdown source fil
 
 ```bash
 # Install dependencies (Python 3.10+)
-pip install fastapi uvicorn jinja2 markdown-it-py httpx python-multipart
+pip install fastapi uvicorn jinja2 markdown-it-py mdit-py-plugins httpx python-multipart
 
 # Run server (serve a directory for review)
 python doc-review/server.py /path/to/docs --host 127.0.0.1 --port 28080
@@ -21,6 +21,7 @@ cd doc-review && pytest -v
 - **Storage:** SQLite (`comments.db`) for block-anchored comments
 - **File identity:** git blob object id for git-tracked files; path+content SHA-256 fallback
 - **Rendering:** Markdown source parsed by markdown-it-py into blocks, rendered to HTML with per-block anchors and TOC
+- **Presentation mode:** Marp-shaped markdown (`---` slide breaks + front-matter directives) presented as slides — a client-side grouping of the *same* blocks review mode renders, so comments keep their anchors across a mode flip. Read-only; `Esc` returns to review
 - **Responsive:** Desktop = sidebar; mobile = inline expandable panels
 
 ## Project Structure
@@ -43,6 +44,7 @@ doc-review/
 ├── test_db.py         # Data layer tests
 ├── test_file_id.py    # File ID derivation tests
 ├── test_renderer.py   # Renderer tests
+├── test_presentation.py # Marp presentation mode + anchor-parity tests
 ├── test_view_specs.py # Render-spec builder tests
 ├── test_server.py     # Route-level tests
 └── README.md          # This file

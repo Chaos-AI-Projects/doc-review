@@ -1801,3 +1801,112 @@ class TestSpecBuilderParity:
         markup — exactly the drift this shares the module to prevent."""
         resp = client.get("/py/view_specs.py")
         assert resp.headers["Cache-Control"] == "no-store"
+
+
+class TestPresentationMode:
+    """Marp presentation mode (#452).
+
+    Presentation mode is JS-only by design, so these route-level tests cover
+    the seams that no-browser testing can still reach: that review mode is
+    untouched, that the client bridge is actually wired, and that the parser
+    change did not orphan comments anchored inside front matter.
+    """
+
+    @pytest.fixture
+    def marp_client(self, source_dir):
+        (Path(source_dir) / "deck.md").write_text(
+            "---\nmarp: true\ntheme: gaia\npaginate: true\n---\n\n"
+            "# Slide one\n\nbody\n\n---\n\n# Slide two\n\nmore\n"
+        )
+        configure(source_dir, Path(source_dir) / "test_comments.db")
+        return TestClient(app)
+
+    def test_review_mode_still_renders_a_deck_server_side(self, marp_client):
+        """Requirement 4: presentation mode may be JS-only, review mode may
+        not.  A Marp file is an ordinary reviewable document."""
+        html = marp_client.get("/view?path=deck.md").text
+        assert 'class="source-line' in html
+        assert "<h1>Slide one</h1>" in html
+        assert "<h1>Slide two</h1>" in html
+
+    def test_front_matter_no_longer_renders_as_a_bogus_heading(self, marp_client):
+        """Gotcha 1: the closing `---` used to be read as a setext underline,
+        so the directives rendered as an <h2> at the top of every file."""
+        html = marp_client.get("/view?path=deck.md").text
+        assert "<h2>marp: true" not in html
+        assert 'class="front-matter"' in html
+
+    def test_a_plain_file_renders_exactly_as_before(self, client):
+        """Requirement 4: additive.  No front matter, no `---`, no change."""
+        html = client.get("/view?path=test.md").text
+        assert "<h1>Hello</h1>" in html
+        assert "front-matter" not in html
+        assert 'id="L1"' in html
+
+    def test_comment_inside_front_matter_still_resolves_to_a_block(
+        self, marp_client
+    ):
+        """The front-matter lines became one block instead of two.  A comment
+        anchored in that range must still land on a block that exists — an
+        orphan here is the 2026-07-22 incident all over again."""
+        import server
+
+        resp = marp_client.post(
+            "/api/comments",
+            json={
+                "file_id": server.build_view_payload("deck.md")["file_id"],
+                "path": "deck.md",
+                "line_start": 3,
+                "line_end": 3,
+                "body": "on the theme directive",
+            },
+        )
+        assert resp.status_code == 201
+
+        payload = server.build_view_payload("deck.md")
+        starts = {b["start_line"] for b in payload["blocks"]}
+        assert set(payload["comments_by_block"]) <= starts, (
+            "comment anchored outside any block"
+        )
+        assert 1 in payload["comments_by_block"]
+
+    def test_view_page_wires_up_presentation_mode(self, marp_client):
+        """Without this the bridge could be deleted and the suite would stay
+        green while the Present button silently never appeared."""
+        html = marp_client.get("/view?path=deck.md").text
+        assert 'id="present-toggle"' in html
+        assert "presentation_specs" in html, "warm runtime never imports it"
+        assert "presentationSpecs" in html, "warm runtime does not expose it"
+        assert "mdit-py-plugins" in html, "front_matter plugin never installed"
+        assert "docreview:renderer-ready" in html
+
+    def test_present_button_is_hidden_without_javascript(self, marp_client):
+        """Presentation mode is JS-only; a no-JS reader must not see a dead
+        control."""
+        html = marp_client.get("/view?path=deck.md").text
+        button = html[html.index('id="present-toggle"'):]
+        assert "hidden" in button[: button.index(">")]
+
+    def test_app_js_groups_slides_through_the_python_builder(self, marp_client):
+        """Anti-drift: the grouping must come from view_specs, not a JS copy.
+        A second grouping implementation is exactly what would let the two
+        modes disagree about which block a comment belongs to."""
+        js = marp_client.get("/static/app.js").text
+        assert "renderer.presentationSpecs" in js
+
+    def test_app_js_requires_the_builder_before_soft_navigating(
+        self, marp_client
+    ):
+        """A partially-initialised runtime must degrade to a full page load
+        rather than throw mid-swap."""
+        js = marp_client.get("/static/app.js").text
+        needed = js[js.index("var needed = ["):]
+        assert "presentationSpecs" in needed[: needed.index("]")]
+
+    def test_presenting_unmounts_the_comment_ui(self, marp_client):
+        """Owner decision: presentation mode is strictly read-only."""
+        js = marp_client.get("/static/app.js").text
+        assert "if (presenting) return;" in js, (
+            "block clicks still open the comment form while presenting"
+        )
+        assert "inline-comments" in js

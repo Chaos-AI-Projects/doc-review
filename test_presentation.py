@@ -1,0 +1,351 @@
+"""Tests for Marp-format presentation mode (#452).
+
+Presentation mode is a **grouping + CSS layer over the same block list** review
+mode renders.  There is no second parse path and no second markup path: the
+slides are built from the very ``source_row_specs()`` dicts the Jinja render and
+the soft swap already use.
+
+That is what makes the anchor-parity guarantee in ``TestAnchorParity`` hold *by
+construction* rather than by coincidence — and anchor parity is the whole point.
+A comment is attached to ``id="L{start_line}"``; if a mode flip moved a block's
+line range, every comment on that block would orphan (cf. the 2026-07-22
+comment-loss incident).
+"""
+
+import pytest
+
+from renderer import render_markdown_blocks
+from view_specs import (
+    front_matter_directives,
+    presentation_specs,
+    slide_specs,
+    source_row_specs,
+)
+
+# A Marp-shaped document exercising all three gotchas from the issue:
+# global front matter (1), no per-slide directives yet (2), and a `---`
+# directly under a text line, which CommonMark reads as a setext heading
+# underline rather than a thematic break (3).
+MARP_DOC = "\n".join(
+    [
+        "---",                  # 1
+        "marp: true",           # 2
+        "theme: default",       # 3
+        "paginate: true",       # 4
+        "---",                  # 5
+        "",                     # 6
+        "# Slide one",          # 7
+        "",                     # 8
+        "body text",            # 9
+        "",                     # 10
+        "---",                  # 11
+        "",                     # 12
+        "# Slide two",          # 13
+        "",                     # 14
+        "- a",                  # 15
+        "- b",                  # 16
+        "",                     # 17
+        "---",                  # 18
+        "",                     # 19
+        "# Slide three",        # 20
+        "",                     # 21
+        "tail",                 # 22
+        "---",                  # 23
+        "not a break",          # 24
+        "",
+    ]
+)
+
+PLAIN_DOC = "# Title\n\nJust a paragraph.\n\n## Section\n\nMore text.\n"
+
+
+@pytest.fixture
+def marp_blocks():
+    return render_markdown_blocks(MARP_DOC)
+
+
+@pytest.fixture
+def plain_blocks():
+    return render_markdown_blocks(PLAIN_DOC)
+
+
+def _rows(slides):
+    """Every row spec across all slides, in document order."""
+    return [row for slide in slides for row in slide["rows"]]
+
+
+class TestFrontMatter:
+    """Gotcha 1: without the ``front_matter`` plugin, ``---\\nmarp: true\\n---``
+    parses as a thematic break plus a setext ``<h2>`` and renders as visible
+    junk at the top of every deck."""
+
+    def test_front_matter_is_one_block_not_an_hr_plus_heading(self, marp_blocks):
+        first = marp_blocks[0]
+        assert (first["start_line"], first["end_line"]) == (1, 5)
+
+    def test_front_matter_does_not_render_as_a_heading(self, marp_blocks):
+        """It renders as metadata, not as `<hr>` + a bogus setext `<h2>`."""
+        assert marp_blocks[0]["type"] == "front_matter"
+        assert "<h2>" not in marp_blocks[0]["html"]
+        assert marp_blocks[0]["html"] == (
+            '<pre class="front-matter">marp: true\ntheme: default\n'
+            "paginate: true</pre>"
+        )
+
+    def test_front_matter_content_is_escaped(self):
+        """It is shown verbatim, so it must not be able to inject markup."""
+        blocks = render_markdown_blocks(
+            '---\ntitle: <img src=x onerror="alert(1)">\n---\n\n# T\n'
+        )
+        assert "<img" not in blocks[0]["html"]
+        assert "&lt;img" in blocks[0]["html"]
+
+    def test_front_matter_does_not_split_a_slide(self, marp_blocks):
+        """Its closing `---` is consumed as metadata, not read as a break."""
+        assert len(slide_specs(marp_blocks)) == 3
+
+    def test_directives_are_parsed_as_config(self):
+        assert front_matter_directives(MARP_DOC) == {
+            "marp": "true",
+            "theme": "default",
+            "paginate": "true",
+        }
+
+    def test_no_front_matter_no_directives(self):
+        assert front_matter_directives(PLAIN_DOC) == {}
+
+    def test_a_leading_thematic_break_is_not_front_matter(self):
+        """`---` followed by a blank line opens no metadata block."""
+        assert front_matter_directives("---\n\n# Title\n") == {}
+
+    def test_directive_values_keep_inner_colons(self):
+        assert front_matter_directives("---\ntitle: a: b\n---\n") == {
+            "title": "a: b"
+        }
+
+
+class TestSlideGrouping:
+    def test_slides_split_on_thematic_breaks(self, marp_blocks):
+        assert len(slide_specs(marp_blocks)) == 3
+
+    def test_slides_are_numbered_from_one(self, marp_blocks):
+        slides = slide_specs(marp_blocks)
+        assert [s["index"] for s in slides] == [0, 1, 2]
+        assert [s["number"] for s in slides] == [1, 2, 3]
+
+    def test_each_slide_holds_the_blocks_between_its_breaks(self, marp_blocks):
+        slides = slide_specs(marp_blocks)
+        assert [[r["startLine"] for r in s["rows"]] for s in slides] == [
+            [7, 9],
+            [13, 15],
+            [20, 22, 24],
+        ]
+
+    def test_the_break_itself_is_not_slide_content(self, marp_blocks):
+        """The `<hr>` rows are delimiters; they must not show up on a slide."""
+        assert "<hr>" not in [r["html"] for r in _rows(slide_specs(marp_blocks))]
+
+    def test_setext_underline_does_not_split(self, marp_blocks):
+        """Gotcha 3: `---` directly under a text line is a heading underline.
+        Lines 22-24 stay on slide three."""
+        assert [r["startLine"] for r in slide_specs(marp_blocks)[2]["rows"]] == [
+            20,
+            22,
+            24,
+        ]
+
+    def test_a_document_without_breaks_is_a_single_slide(self, plain_blocks):
+        slides = slide_specs(plain_blocks)
+        assert len(slides) == 1
+        assert [r["startLine"] for r in slides[0]["rows"]] == [1, 3, 5, 7]
+
+    def test_no_blocks_no_slides(self):
+        assert slide_specs([]) == []
+        assert slide_specs(None) == []
+
+    def test_fenced_code_containing_a_rule_does_not_split(self):
+        """A `---` inside a fence is content, not a break."""
+        blocks = render_markdown_blocks("# T\n\n```\n---\n```\n\nafter\n")
+        assert len(slide_specs(blocks)) == 1
+
+    def test_a_starred_rule_does_not_split(self):
+        """Marp splits on `---`.  `***` renders a real horizontal rule and must
+        stay visible on the slide rather than silently cutting the deck."""
+        blocks = render_markdown_blocks("# T\n\n***\n\nafter\n")
+        slides = slide_specs(blocks)
+        assert len(slides) == 1
+        assert "<hr>" in [r["html"] for r in slides[0]["rows"]]
+
+    def test_adjacent_breaks_make_no_blank_slide(self):
+        blocks = render_markdown_blocks("# One\n\n---\n\n---\n\n# Two\n")
+        assert [[r["startLine"] for r in s["rows"]] for s in slide_specs(blocks)] == [
+            [1],
+            [7],
+        ]
+
+    def test_a_trailing_break_makes_no_blank_slide(self):
+        blocks = render_markdown_blocks("# One\n\n---\n\n# Two\n\n---\n")
+        assert [[r["startLine"] for r in s["rows"]] for s in slide_specs(blocks)] == [
+            [1],
+            [5],
+        ]
+
+    def test_a_deck_must_not_open_with_a_slide_break(self):
+        """Known Marp/YAML trap, documented rather than silently wrong: a `---`
+        on line 1 opens front matter, so it is swallowed as metadata together
+        with everything up to the next `---`.  Start decks with content."""
+        blocks = render_markdown_blocks("---\n\n# Only\n\n---\n")
+        assert [b["type"] for b in blocks] == ["front_matter"]
+        assert slide_specs(blocks) == []
+
+
+class TestAnchorParity:
+    """**The most important test in the PR.**
+
+    A block must keep the identical ``token.map`` line range — and therefore the
+    identical comment anchor — in review mode and in presentation mode.
+    """
+
+    COMMENTS = {7: [{"id": 1, "body": "on the title"}], 15: [{"id": 2}, {"id": 3}]}
+
+    def test_every_slide_row_is_the_review_row_verbatim(self, marp_blocks):
+        review = {r["id"]: r for r in source_row_specs(marp_blocks, self.COMMENTS)}
+        for row in _rows(slide_specs(marp_blocks, self.COMMENTS)):
+            assert row == review[row["id"]], (
+                f"block {row['id']} renders differently in presentation mode"
+            )
+
+    def test_line_ranges_are_identical_in_both_modes(self, marp_blocks):
+        review = source_row_specs(marp_blocks, self.COMMENTS)
+        presented = _rows(slide_specs(marp_blocks, self.COMMENTS))
+        review_ranges = {(r["startLine"], r["endLine"]) for r in review}
+        presented_ranges = {(r["startLine"], r["endLine"]) for r in presented}
+        # Presentation mode drops only the delimiters and metadata; every range
+        # it *does* show is byte-identical to the review-mode one.
+        assert presented_ranges <= review_ranges
+        assert review_ranges - presented_ranges == {(1, 5), (11, 11), (18, 18)}
+
+    def test_a_comment_resolves_to_the_same_block_in_both_modes(self, marp_blocks):
+        """A comment made in review mode must still belong to that block after a
+        mode flip — the contract the 2026-07-22 comment-loss incident broke."""
+        review = {r["id"]: r for r in source_row_specs(marp_blocks, self.COMMENTS)}
+        presented = {r["id"]: r for r in _rows(slide_specs(marp_blocks, self.COMMENTS))}
+
+        for anchor, count in (("L7", 1), ("L15", 2)):
+            assert presented[anchor]["commentCount"] == count
+            assert presented[anchor]["commentCount"] == review[anchor]["commentCount"]
+            assert presented[anchor]["startLine"] == review[anchor]["startLine"]
+            assert presented[anchor]["endLine"] == review[anchor]["endLine"]
+
+    def test_anchor_ids_are_still_the_block_start_line(self, marp_blocks):
+        for row in _rows(slide_specs(marp_blocks, self.COMMENTS)):
+            assert row["id"] == f"L{row['startLine']}"
+
+    def test_comment_markers_survive_json_string_keys(self, marp_blocks):
+        """The client gets `comments_by_block` back from JSON with str keys."""
+        as_str = {str(k): v for k, v in self.COMMENTS.items()}
+        assert slide_specs(marp_blocks, as_str) == slide_specs(
+            marp_blocks, self.COMMENTS
+        )
+
+
+class TestPresentationSpecs:
+    def test_marp_document_offers_presentation_mode(self, marp_blocks):
+        assert presentation_specs(marp_blocks, None, MARP_DOC)["available"] is True
+
+    def test_multi_slide_document_offers_presentation_mode(self):
+        """No front matter, but it is clearly a deck."""
+        source = "# One\n\n---\n\n# Two\n"
+        blocks = render_markdown_blocks(source)
+        assert presentation_specs(blocks, None, source)["available"] is True
+
+    def test_ordinary_document_does_not_offer_presentation_mode(self, plain_blocks):
+        assert presentation_specs(plain_blocks, None, PLAIN_DOC)["available"] is False
+
+    def test_theme_comes_from_the_front_matter(self, marp_blocks):
+        assert presentation_specs(marp_blocks, None, MARP_DOC)["theme"] == "default"
+
+    def test_theme_falls_back_when_undeclared(self, plain_blocks):
+        assert presentation_specs(plain_blocks, None, PLAIN_DOC)["theme"] == "default"
+
+    def test_theme_is_constrained_to_a_known_set(self):
+        """The theme lands in a CSS class name; an arbitrary front-matter string
+        must not get there."""
+        source = "---\nmarp: true\ntheme: ../../evil \"x\n---\n\n# T\n"
+        blocks = render_markdown_blocks(source)
+        assert presentation_specs(blocks, None, source)["theme"] == "default"
+
+    def test_paginate_is_a_boolean(self, marp_blocks):
+        assert presentation_specs(marp_blocks, None, MARP_DOC)["paginate"] is True
+
+    def test_paginate_defaults_off(self, plain_blocks):
+        assert presentation_specs(plain_blocks, None, PLAIN_DOC)["paginate"] is False
+
+    def test_slides_match_the_slide_builder(self, marp_blocks):
+        comments = {7: [{"id": 1}]}
+        assert presentation_specs(marp_blocks, comments, MARP_DOC)[
+            "slides"
+        ] == slide_specs(marp_blocks, comments)
+
+
+class TestReviewModeIsUnchanged:
+    """Requirement 4: a document with no `---` and no front matter must render
+    exactly as it does today."""
+
+    def test_plain_document_blocks_are_untouched(self, plain_blocks):
+        assert [(b["start_line"], b["end_line"]) for b in plain_blocks] == [
+            (1, 1),
+            (3, 3),
+            (5, 5),
+            (7, 7),
+        ]
+        assert [b["html"] for b in plain_blocks] == [
+            "<h1>Title</h1>",
+            "<p>Just a paragraph.</p>",
+            "<h2>Section</h2>",
+            "<p>More text.</p>",
+        ]
+
+    def test_plain_document_row_specs_are_untouched(self, plain_blocks):
+        assert source_row_specs(plain_blocks, None)[0] == {
+            "id": "L1",
+            "rowClass": "source-line",
+            "startLine": 1,
+            "endLine": 1,
+            "label": "1",
+            "html": "<h1>Title</h1>",
+            "commentCount": 0,
+        }
+
+    def test_a_lone_thematic_break_still_renders_in_review_mode(self):
+        """Review mode shows every block, breaks included — only presentation
+        mode treats them as delimiters."""
+        blocks = render_markdown_blocks("# T\n\n---\n\n# U\n")
+        assert [b["html"] for b in blocks] == ["<h1>T</h1>", "<hr>", "<h1>U</h1>"]
+
+
+class TestPyodideBridgeContract:
+    """The client calls these builders across the WASM bridge as
+    ``json.dumps(fn(*json.loads(arg)))``.  Exercise that exact marshalling: JSON
+    stringifies int dict keys and turns tuples into lists, so a builder that
+    only works on native Python input would break only in the browser."""
+
+    @staticmethod
+    def _via_bridge(fn, args):
+        import json
+
+        return json.loads(json.dumps(fn(*json.loads(json.dumps(args)))))
+
+    def test_slide_specs_survive_the_round_trip(self, marp_blocks):
+        comments = {7: [{"id": 1}]}
+        assert self._via_bridge(slide_specs, [marp_blocks, comments]) == slide_specs(
+            marp_blocks, comments
+        )
+
+    def test_slide_specs_accept_the_js_null_defaults(self):
+        assert self._via_bridge(slide_specs, [None, None]) == []
+
+    def test_presentation_specs_survive_the_round_trip(self, marp_blocks):
+        assert self._via_bridge(
+            presentation_specs, [marp_blocks, None, MARP_DOC]
+        ) == presentation_specs(marp_blocks, None, MARP_DOC)

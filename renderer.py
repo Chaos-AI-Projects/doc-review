@@ -10,6 +10,7 @@ import html as html_mod
 import re
 
 from markdown_it import MarkdownIt
+from mdit_py_plugins.front_matter import front_matter_plugin
 
 # Allowed HTML tags for sanitized output (defense-in-depth).
 _ALLOWED_TAGS = frozenset({
@@ -72,16 +73,30 @@ def _sanitize_html(html: str) -> str:
 
 
 def _new_parser() -> MarkdownIt:
-    """Create a MarkdownIt parser with our standard settings."""
-    return MarkdownIt("commonmark", {"html": False}).enable("table")
+    """Create a MarkdownIt parser with our standard settings.
+
+    ``front_matter_plugin`` consumes a leading ``---`` metadata block as a
+    single token (#452).  Without it CommonMark reads the closing ``---`` as a
+    setext heading underline, so ``---\\nmarp: true\\n---`` renders as an
+    ``<hr>`` followed by a bogus ``<h2>marp: true</h2>``.
+    """
+    return (
+        MarkdownIt("commonmark", {"html": False})
+        .enable("table")
+        .use(front_matter_plugin)
+    )
 
 
 def render_markdown_blocks(source: str) -> list[dict]:
     """Parse *source* as markdown and return per-block data.
 
-    Each entry: ``{"start_line": int, "end_line": int, "raw": str, "html": str}``
+    Each entry:
+    ``{"start_line": int, "end_line": int, "type": str, "raw": str, "html": str}``
 
     - ``start_line`` and ``end_line`` are 1-based inclusive.
+    - ``type`` is the block's markdown-it token type (``"hr"``, ``"paragraph"``,
+      ``"front_matter"``, …), so callers can make structural decisions without
+      pattern-matching rendered HTML (#452 slide grouping).
     - ``raw`` is the original source text for the block's lines.
     - ``html`` is the block rendered as sanitized HTML.
 
@@ -138,14 +153,22 @@ def _render_block(
     end_1 = end_0  # end_0 exclusive → end_0 is 1-based inclusive
     raw = "\n".join(source_lines[start_0:end_0])
 
+    first = block_tokens[0]
+
     # Special-case mermaid fenced blocks.
     if (
         len(block_tokens) == 1
-        and block_tokens[0].type == "fence"
-        and block_tokens[0].info.strip() == "mermaid"
+        and first.type == "fence"
+        and first.info.strip() == "mermaid"
     ):
-        content = block_tokens[0].content.rstrip("\n")
+        content = first.content.rstrip("\n")
         rendered = f'<div class="mermaid">{html_mod.escape(content)}</div>'
+    elif first.type == "front_matter":
+        # The plugin renders front matter to nothing.  Show it instead: it is
+        # document metadata a reviewer may want to read and comment on, and a
+        # block that renders to nothing would look like lost content.
+        content = first.content.strip("\n")
+        rendered = f'<pre class="front-matter">{html_mod.escape(content)}</pre>'
     else:
         rendered = md.renderer.render(block_tokens, md.options, {})
         rendered = _sanitize_html(rendered)
@@ -153,6 +176,7 @@ def _render_block(
     return {
         "start_line": start_1,
         "end_line": end_1,
+        "type": first.type.removesuffix("_open"),
         "raw": raw,
         "html": rendered.strip(),
     }

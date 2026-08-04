@@ -39,6 +39,36 @@
         return /^#L\d+$/.test(hash || "") ? String(hash).slice(1) : null;
     }
 
+    /* Presentation mode (#452): what a keypress means while presenting.
+     * "next" | "prev" | "exit" | null (null = leave the key alone). */
+    function presentationAction(key) {
+        switch (key) {
+        case "ArrowRight":
+        case "ArrowDown":
+        case "PageDown":
+        case " ":
+        case "Spacebar":  /* legacy key name */
+            return "next";
+        case "ArrowLeft":
+        case "ArrowUp":
+        case "PageUp":
+            return "prev";
+        case "Escape":
+        case "Esc":       /* legacy key name */
+            return "exit";
+        default:
+            return null;
+        }
+    }
+
+    /* Keep a slide index inside the deck; advancing off either end stays put
+     * rather than wrapping (a wrap mid-talk looks like a lost slide). */
+    function clampSlide(index, count) {
+        if (!count || count < 1) return 0;
+        if (index < 0) return 0;
+        return index > count - 1 ? count - 1 : index;
+    }
+
     /* The row/TOC/header render-spec builders that used to live here were
      * ported to Python in view_specs.py (#451): the server-side Jinja render
      * and the client soft swap now share one implementation, so they cannot
@@ -53,6 +83,8 @@
         shouldIntercept: shouldIntercept,
         popstateAction: popstateAction,
         lineAnchorId: lineAnchorId,
+        presentationAction: presentationAction,
+        clampSlide: clampSlide,
     };
 
     if (typeof module !== "undefined" && module.exports) {

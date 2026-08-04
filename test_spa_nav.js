@@ -97,6 +97,33 @@ assert("non-line fragment is not treated as an anchor",
 assert("bare #L is not an anchor", nav.lineAnchorId("#L"), null);
 assert("#Lfoo is not an anchor", nav.lineAnchorId("#Lfoo"), null);
 
+// ── Presentation mode key handling (#452) ──
+//
+// The slide *grouping* is Python (view_specs.slide_specs, covered by
+// test_presentation.py); only the keyboard decision stays in JS, because it
+// must respond instantly and never depends on the renderer being warm.
+
+assert("right arrow advances", nav.presentationAction("ArrowRight"), "next");
+assert("down arrow advances", nav.presentationAction("ArrowDown"), "next");
+assert("page down advances", nav.presentationAction("PageDown"), "next");
+assert("space advances", nav.presentationAction(" "), "next");
+assert("legacy Spacebar advances", nav.presentationAction("Spacebar"), "next");
+assert("left arrow goes back", nav.presentationAction("ArrowLeft"), "prev");
+assert("up arrow goes back", nav.presentationAction("ArrowUp"), "prev");
+assert("page up goes back", nav.presentationAction("PageUp"), "prev");
+assert("Escape leaves presentation mode", nav.presentationAction("Escape"), "exit");
+assert("legacy Esc leaves presentation mode", nav.presentationAction("Esc"), "exit");
+assert("an ordinary key is left alone", nav.presentationAction("a"), null);
+assert("Tab is left alone", nav.presentationAction("Tab"), null);
+assert("an undefined key is left alone", nav.presentationAction(undefined), null);
+
+assert("slide index advances", nav.clampSlide(1, 3), 1);
+assert("advancing past the last slide stays put",
+    nav.clampSlide(3, 3), 2);
+assert("going back past the first slide stays put",
+    nav.clampSlide(-1, 3), 0);
+assert("an empty deck clamps to 0", nav.clampSlide(2, 0), 0);
+
 // ── Render-spec builders moved to Python (#451) ──
 //
 // sourceRowSpecs / tocItemSpecs / headerFields / rowClass / lineLabel now live
@@ -104,7 +131,12 @@ assert("#Lfoo is not an anchor", nav.lineAnchorId("#Lfoo"), null);
 // truth; their cases were ported to test_view_specs.py.  Assert the JS copies
 // are really gone — two implementations is exactly the drift the port removes.
 
-var ported = ["sourceRowSpecs", "tocItemSpecs", "headerFields", "rowClass", "lineLabel"];
+var ported = [
+    "sourceRowSpecs", "tocItemSpecs", "headerFields", "rowClass", "lineLabel",
+    // Slide grouping is Python too (#452) — grouping the same row specs is what
+    // makes a comment resolve to the same block in both modes.
+    "slideSpecs", "presentationSpecs", "frontMatterDirectives",
+];
 for (var p = 0; p < ported.length; p++) {
     assert("ported builder " + ported[p] + " is no longer exported by JS",
         typeof nav[ported[p]], "undefined");

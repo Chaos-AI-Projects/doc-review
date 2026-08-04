@@ -24,6 +24,11 @@ It must not change (cf. the 2026-07-22 comment-loss incident).
 """
 
 
+# Themes presentation mode ships CSS for (#452).  An unknown front-matter
+# value falls back to "default" rather than reaching a class attribute.
+PRESENTATION_THEMES = ("default", "gaia", "uncover")
+
+
 def row_class(comment_count):
     """CSS classes for a source row, flagged when it carries comments."""
     return "source-line" + (" has-comments" if comment_count else "")
@@ -79,6 +84,93 @@ def toc_item_specs(toc):
         }
         for entry in toc or []
     ]
+
+
+def _append_slide(slides, rows):
+    """Append a slide unless it would be blank (leading/adjacent breaks)."""
+    if rows:
+        slides.append(
+            {"index": len(slides), "number": len(slides) + 1, "rows": rows}
+        )
+
+
+def _is_slide_break(block):
+    """Is *block* a Marp slide break?
+
+    Marp splits on ``---``.  ``***`` and ``___`` are thematic breaks too, but
+    they are not slide breaks — they stay visible on the slide rather than
+    silently cutting the deck.  Checking ``type`` rather than the rendered HTML
+    keeps this decision structural: a ``---`` inside a fence is content, and a
+    ``---`` under a text line is a setext heading underline, and neither is
+    typed ``hr``.
+    """
+    return block.get("type") == "hr" and set(block.get("raw", "").strip()) == {"-"}
+
+
+def slide_specs(blocks, comments_by_block=None):
+    """Group the review-mode rows into slides (#452).
+
+    A slide is the run of blocks between two ``---`` breaks.  The rows are the
+    *same* specs ``source_row_specs()`` builds for review mode — presentation
+    mode is a grouping layer, not a second markup path — so every block keeps
+    an identical line range, and therefore an identical ``id="L{start_line}"``
+    comment anchor, in both modes.
+
+    The breaks themselves are delimiters and front matter is metadata, so
+    neither becomes slide content.
+    """
+    specs = source_row_specs(blocks, comments_by_block)
+    slides = []
+    rows = []
+    for block, spec in zip(blocks or [], specs):
+        if _is_slide_break(block):
+            _append_slide(slides, rows)
+            rows = []
+        elif block.get("type") != "front_matter":
+            rows.append(spec)
+    _append_slide(slides, rows)
+    return slides
+
+
+def front_matter_directives(source):
+    """Global directives from a leading ``---`` front-matter block.
+
+    Mirrors the ``front_matter`` parser rule: the block opens only on line 1
+    and runs to the next bare ``---``.  Values are returned as written; the
+    caller decides what a directive means.
+    """
+    lines = (source or "").split("\n")
+    if not lines or lines[0].strip() != "---":
+        return {}
+    directives = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return directives
+        key, sep, value = line.partition(":")
+        if sep and key.strip():
+            directives[key.strip().lower()] = value.strip()
+    return {}  # unterminated: the parser does not see front matter either
+
+
+def presentation_specs(blocks, comments_by_block=None, source=""):
+    """Everything the client needs to present a document as slides (#452).
+
+    v1 honours the global ``marp`` / ``theme`` / ``paginate`` directives only —
+    no per-slide ``_class``.
+    """
+    directives = front_matter_directives(source)
+    slides = slide_specs(blocks, comments_by_block)
+    theme = directives.get("theme", "")
+    return {
+        # Offered for a declared deck, or for anything already split into
+        # slides.  A one-slide document would just be review mode with the
+        # comment UI taken away.
+        "available": directives.get("marp", "").lower() == "true" or len(slides) > 1,
+        # Lands in a CSS class name, so it may only ever be one of ours.
+        "theme": theme if theme in PRESENTATION_THEMES else "default",
+        "paginate": directives.get("paginate", "").lower() == "true",
+        "slides": slides,
+    }
 
 
 def header_fields(data):

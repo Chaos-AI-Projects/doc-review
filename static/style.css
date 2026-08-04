@@ -459,3 +459,79 @@ main { padding: 1rem; }
 }
 .pyodide-status.ready { color: #2a7; }
 .pyodide-status.fallback { color: #999; }
+
+/* ── Marp presentation mode (#452) ──
+ *
+ * Presentation mode is a grouping + CSS layer over the same blocks review mode
+ * renders; nothing here changes how a block is anchored.  Strictly read-only:
+ * the comment column is hidden and the comment UI is unmounted by app.js.
+ */
+body.presenting { overflow: hidden; }
+body.presenting .file-header { position: relative; z-index: 2; }
+
+.presentation {
+    position: fixed;
+    inset: 0;
+    background: #fff;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    outline: none;
+}
+
+.presentation .slide {
+    position: relative;  /* anchors .slide-number */
+    box-sizing: border-box;
+    width: min(96vw, calc((100vh - 4rem) * 16 / 9));
+    height: min(calc(100vh - 4rem), calc(96vw * 9 / 16));
+    padding: 3rem 4rem;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.75rem;
+    font-size: clamp(1rem, 2.2vh, 1.6rem);
+}
+.presentation .slide[hidden] { display: none; }
+
+.presentation .slide h1 { font-size: 2.4em; margin: 0 0 0.3em; }
+.presentation .slide h2 { font-size: 1.8em; margin: 0 0 0.3em; }
+.presentation .slide h3 { font-size: 1.4em; margin: 0 0 0.3em; }
+.presentation .slide p,
+.presentation .slide ul,
+.presentation .slide ol { margin: 0 0 0.5em; line-height: 1.5; }
+.presentation .slide li { margin-bottom: 0.25em; }
+.presentation .slide pre {
+    font-size: 0.75em;
+    overflow: auto;
+    background: #f6f8fa;
+    padding: 0.75em;
+    border-radius: 4px;
+}
+.presentation .slide img { max-width: 100%; }
+
+.presentation .slide-number {
+    position: absolute;
+    bottom: 1.5rem;
+    right: 2rem;
+    font-size: 0.8rem;
+    color: #999;
+}
+
+/* Themes are constrained to this set by view_specs.PRESENTATION_THEMES. */
+.presentation.theme-gaia { background: #fffefb; color: #2c2c2c; }
+.presentation.theme-gaia .slide h1 { color: #1a4f9c; }
+.presentation.theme-uncover { background: #fff; text-align: center; }
+.presentation.theme-uncover .slide { align-items: center; }
+
+/* Front matter shown as metadata rather than a bogus setext heading (#452). */
+pre.front-matter {
+    background: #f6f8fa;
+    border-left: 3px solid #d0d7de;
+    color: #57606a;
+    font-size: 0.85em;
+    padding: 0.5em 0.75em;
+    margin: 0;
+    white-space: pre-wrap;
+}

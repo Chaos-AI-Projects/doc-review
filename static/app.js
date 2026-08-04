@@ -10,6 +10,7 @@
     var sidebar = document.getElementById("sidebar-content");
     var formTpl = document.getElementById("comment-form-tpl");
     var isMobile = window.matchMedia("(max-width: 768px)").matches;
+    var presenting = false;  // presentation mode is read-only (#452)
 
     /* ── File navigator toggle (mobile) ── */
 
@@ -273,6 +274,7 @@
     /* ── Event delegation for block content and markers ── */
 
     document.addEventListener("click", function (e) {
+        if (presenting) return;  // read-only while presenting (#452)
         var contentEl = e.target.closest(".line-content");
         var markerEl = e.target.closest(".marker-btn");
         var lineNumEl = e.target.closest(".line-num");
@@ -316,7 +318,10 @@
     function warmRenderer() {
         var r = window.docReviewRenderer;
         if (!r) return null;
-        var needed = ["renderBlocks", "sourceRowSpecs", "tocItemSpecs", "headerFields"];
+        var needed = [
+            "renderBlocks", "sourceRowSpecs", "tocItemSpecs", "headerFields",
+            "presentationSpecs",
+        ];
         for (var i = 0; i < needed.length; i++) {
             if (typeof r[needed[i]] !== "function") return null;
         }
@@ -436,8 +441,13 @@
     }
 
     function applyDocument(renderer, data, blocks) {
+        // A swap replaces the document under the deck; never present the
+        // previous file's slides over the new one.
+        if (presenting) exitPresentation();
         commentsData = data.comments_by_block || {};
         currentPath = data.path;
+        currentBlocks = blocks;
+        deckSpecs = null;  // the new file is a different deck (or none)
         updateHeader(renderer, data);
         sourceBody.innerHTML = "";
         sourceBody.appendChild(buildSourceRows(renderer, blocks));
@@ -452,6 +462,7 @@
         setEmbeddedJson("comments-data", commentsData);
         setEmbeddedJson("current-path-data", currentPath);
         setEmbeddedJson("source-data", data.source);
+        refreshPresentToggle();
     }
 
     /* Restore the "#L42" line anchor after a swap (Back/Forward onto a deep
@@ -525,5 +536,164 @@
             if (action === "soft" && softNavigate(path, false)) return;
             window.location.reload();
         });
+    }
+
+    /* ── Marp presentation mode (#452) ──
+     *
+     * Strictly read-only: the comment UI is unmounted while presenting and
+     * restored, with every comment still on its original block, on the way
+     * back.  That holds because a slide is only a *grouping* of the same row
+     * specs review mode renders (view_specs.slide_specs) — the blocks keep
+     * their token.map line ranges and their id="L{start}" anchors in both
+     * modes, so nothing re-anchors.
+     *
+     * The toggle is pure client-side: the review DOM is hidden, not destroyed,
+     * and Pyodide is never re-booted.
+     */
+
+    var presentBtn = document.getElementById("present-toggle");
+    var viewLayout = document.querySelector(".view-layout");
+    var currentBlocks = null;   // blocks for the file on screen
+    var deckSpecs = null;       // cached presentation_specs for that file
+    var deckEl = null;
+    var slideIndex = 0;
+
+    function documentSource() {
+        var el = document.getElementById("source-data");
+        return el ? JSON.parse(el.textContent) : "";
+    }
+
+    /* Slide specs for the file on screen, built once per document.  The blocks
+     * are reused from the last render when we have them, so a toggle costs no
+     * markdown re-parse and — crucially — no Pyodide re-boot. */
+    function presentationSpecs(renderer) {
+        if (deckSpecs) return deckSpecs;
+        var source = documentSource();
+        if (!currentBlocks) currentBlocks = renderer.renderBlocks(source);
+        deckSpecs = renderer.presentationSpecs(
+            currentBlocks, commentsData, source
+        );
+        return deckSpecs;
+    }
+
+    function refreshPresentToggle() {
+        if (!presentBtn) return;
+        var renderer = warmRenderer();
+        var specs = null;
+        if (renderer) {
+            try {
+                specs = presentationSpecs(renderer);
+            } catch (err) {
+                console.warn("Presentation mode unavailable:", err);
+            }
+        }
+        presentBtn.hidden = !(specs && specs.available);
+    }
+
+    function buildDeck(specs) {
+        var deck = document.createElement("div");
+        deck.className = "presentation theme-" + specs.theme;
+        deck.tabIndex = -1;  // focusable, so the keys reach the deck
+
+        for (var i = 0; i < specs.slides.length; i++) {
+            var slide = specs.slides[i];
+            var section = document.createElement("section");
+            section.className = "slide";
+            section.setAttribute("data-slide", slide.index);
+
+            for (var j = 0; j < slide.rows.length; j++) {
+                var row = slide.rows[j];
+                var blockEl = document.createElement("div");
+                blockEl.className = "slide-block";
+                // The review-mode anchor, carried onto the slide: same block,
+                // same line range, whichever mode you are looking at.
+                setLineAttrs(blockEl, row);
+                blockEl.innerHTML = row.html;
+                section.appendChild(blockEl);
+            }
+
+            if (specs.paginate) {
+                var num = document.createElement("div");
+                num.className = "slide-number";
+                num.textContent = slide.number + " / " + specs.slides.length;
+                section.appendChild(num);
+            }
+            deck.appendChild(section);
+        }
+        return deck;
+    }
+
+    function showSlide(index) {
+        if (!deckEl) return;
+        var sections = deckEl.querySelectorAll(".slide");
+        slideIndex = navLogic.clampSlide(index, sections.length);
+        for (var i = 0; i < sections.length; i++) {
+            sections[i].hidden = i !== slideIndex;
+        }
+        window.scrollTo(0, 0);
+    }
+
+    function enterPresentation() {
+        var renderer = warmRenderer();
+        if (!renderer || presenting) return;
+        var specs = presentationSpecs(renderer);
+        if (!specs || !specs.slides.length) return;
+
+        // Unmount the comment UI — presenting is read-only, so it must not be
+        // reachable, not merely invisible.
+        document.querySelectorAll(".inline-comments").forEach(function (el) {
+            el.remove();
+        });
+        sidebar.innerHTML =
+            '<p class="sidebar-hint">Click a block to add a comment.</p>';
+        document.querySelectorAll(".source-line.active").forEach(function (el) {
+            el.classList.remove("active");
+        });
+
+        deckEl = buildDeck(specs);
+        // The review DOM is hidden, never destroyed: coming back is a re-show,
+        // with every comment still attached to its block.
+        if (viewLayout) viewLayout.hidden = true;
+        document.body.classList.add("presenting");
+        document.body.appendChild(deckEl);
+        presentBtn.classList.add("active");
+        showSlide(0);
+        deckEl.focus();
+    }
+
+    function exitPresentation() {
+        if (!presenting && !deckEl) return;
+        if (deckEl) {
+            deckEl.remove();
+            deckEl = null;
+        }
+        if (viewLayout) viewLayout.hidden = false;
+        document.body.classList.remove("presenting");
+        if (presentBtn) presentBtn.classList.remove("active");
+        presenting = false;
+    }
+
+    if (presentBtn && navLogic) {
+        presentBtn.addEventListener("click", function () {
+            if (presenting) {
+                exitPresentation();
+            } else {
+                enterPresentation();
+                presenting = !!deckEl;
+            }
+        });
+
+        document.addEventListener("keydown", function (e) {
+            if (!presenting) return;
+            var action = navLogic.presentationAction(e.key);
+            if (!action) return;
+            e.preventDefault();
+            if (action === "exit") exitPresentation();
+            else showSlide(slideIndex + (action === "next" ? 1 : -1));
+        });
+
+        // The Present button only makes sense once the Python builders are
+        // reachable, which is when the Pyodide runtime finishes warming.
+        document.addEventListener("docreview:renderer-ready", refreshPresentToggle);
     }
 })();
