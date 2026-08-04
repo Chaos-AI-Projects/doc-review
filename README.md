@@ -31,6 +31,8 @@ doc-review/
 ├── db.py              # SQLite data layer (comments CRUD)
 ├── file_id.py         # File identity derivation (git blob / content hash)
 ├── renderer.py        # Markdown → per-block HTML renderer (markdown-it-py)
+├── view_specs.py      # Row/TOC/header render specs — shared by the Jinja
+│                      # render and the in-browser Pyodide soft swap
 ├── templates/         # Jinja2 templates
 │   ├── base.html
 │   ├── index.html     # File browser
@@ -41,6 +43,7 @@ doc-review/
 ├── test_db.py         # Data layer tests
 ├── test_file_id.py    # File ID derivation tests
 ├── test_renderer.py   # Renderer tests
+├── test_view_specs.py # Render-spec builder tests
 ├── test_server.py     # Route-level tests
 └── README.md          # This file
 ```

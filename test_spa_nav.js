@@ -97,63 +97,18 @@ assert("non-line fragment is not treated as an anchor",
 assert("bare #L is not an anchor", nav.lineAnchorId("#L"), null);
 assert("#Lfoo is not an anchor", nav.lineAnchorId("#Lfoo"), null);
 
-// ── Rebuilt source rows ──
+// ── Render-spec builders moved to Python (#451) ──
+//
+// sourceRowSpecs / tocItemSpecs / headerFields / rowClass / lineLabel now live
+// in view_specs.py so the Jinja render and the soft swap share one source of
+// truth; their cases were ported to test_view_specs.py.  Assert the JS copies
+// are really gone — two implementations is exactly the drift the port removes.
 
-var blocks = [
-    { start_line: 1, end_line: 1, html: "<h1>T</h1>" },
-    { start_line: 3, end_line: 5, html: "<p>body</p>" },
-];
-var commentsByBlock = { "3": [{ id: 1 }, { id: 2 }] };
-
-assertDeep("row specs carry ids, classes, labels, html and comment counts",
-    nav.sourceRowSpecs(blocks, commentsByBlock),
-    [
-        {
-            id: "L1", rowClass: "source-line", startLine: 1, endLine: 1,
-            label: "1", html: "<h1>T</h1>", commentCount: 0,
-        },
-        {
-            id: "L3", rowClass: "source-line has-comments", startLine: 3,
-            endLine: 5, label: "3-5", html: "<p>body</p>", commentCount: 2,
-        },
-    ]);
-assertDeep("no comment data → no rows marked",
-    nav.sourceRowSpecs(blocks, null).map(function (s) { return s.rowClass; }),
-    ["source-line", "source-line"]);
-assertDeep("no blocks → no rows", nav.sourceRowSpecs(null, {}), []);
-assert("single-line label", nav.lineLabel({ start_line: 4, end_line: 4 }), "4");
-assert("multi-line label", nav.lineLabel({ start_line: 4, end_line: 7 }), "4-7");
-assert("plain row class", nav.rowClass(0), "source-line");
-assert("commented row class", nav.rowClass(2), "source-line has-comments");
-
-// ── Rebuilt TOC ──
-
-assertDeep("toc items keep level classes and #L links",
-    nav.tocItemSpecs([
-        { level: 1, text: "Title", start_line: 1 },
-        { level: 2, text: "Sub", start_line: 9 },
-    ]),
-    [
-        { className: "toc-item toc-level-1", href: "#L1", text: "Title" },
-        { className: "toc-item toc-level-2", href: "#L9", text: "Sub" },
-    ]);
-assertDeep("empty toc → no items", nav.tocItemSpecs([]), []);
-assertDeep("missing toc → no items", nav.tocItemSpecs(undefined), []);
-
-// ── Header + comment-form fields follow the swapped-in file ──
-
-var fields = nav.headerFields({
-    path: "kb/wiki/log.md",
-    file_id: "0123456789abcdef0123456789abcdef",
-});
-assert("header title is the new path", fields.title, "kb/wiki/log.md");
-assert("file id is truncated to 12 chars + ellipsis",
-    fields.fileIdLabel, "0123456789ab\u2026");
-assert("document title follows the new path",
-    fields.documentTitle, "doc-review \u2014 kb/wiki/log.md");
-assert("comment form posts the NEW file_id",
-    fields.formFileId, "0123456789abcdef0123456789abcdef");
-assert("comment form posts the NEW path", fields.formPath, "kb/wiki/log.md");
+var ported = ["sourceRowSpecs", "tocItemSpecs", "headerFields", "rowClass", "lineLabel"];
+for (var p = 0; p < ported.length; p++) {
+    assert("ported builder " + ported[p] + " is no longer exported by JS",
+        typeof nav[ported[p]], "undefined");
+}
 
 // ── Report ──
 

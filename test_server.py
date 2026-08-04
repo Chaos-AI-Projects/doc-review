@@ -1583,9 +1583,11 @@ class TestSpaClientNavigation:
         """app.js must consume the tested module rather than re-implement it."""
         js = self._app_js(client)
         assert "docReviewNavLogic" in js
+        # The spec builders moved to view_specs.py (#451); app.js now reaches
+        # them through the warm runtime, asserted in TestSpecBuilderParity.
+        # What must still come from nav_logic.js is the routing half.
         for fn in (
-            "navLogic.sourceRowSpecs", "navLogic.tocItemSpecs",
-            "navLogic.headerFields", "navLogic.shouldIntercept",
+            "navLogic.shouldIntercept",
             "navLogic.popstateAction", "navLogic.lineAnchorId",
             "navLogic.apiSourceUrl", "navLogic.viewUrl",
         ):
@@ -1679,3 +1681,123 @@ class TestSpaClientNavigation:
         )
         assert result.returncode == 0, \
             f"Behavioral SPA navigation test failed:\n{result.stderr}"
+
+
+class TestSpecBuilderParity:
+    """One source of truth for row/TOC markup (#451).
+
+    The server-side Jinja render and the client-side Pyodide soft swap must
+    derive their markup from the SAME Python builders, so a swapped-in file
+    cannot render differently from a fresh ``/view``.
+    """
+
+    def test_view_renders_through_the_python_builders(self, client, monkeypatch):
+        """Anti-drift: /view must go through view_specs, not inline Jinja."""
+        import server
+
+        row_calls, toc_calls, header_calls = [], [], []
+        orig_rows = server.source_row_specs
+        orig_toc = server.toc_item_specs
+        orig_header = server.header_fields
+
+        def row_spy(blocks, comments_by_block=None):
+            row_calls.append(blocks)
+            return orig_rows(blocks, comments_by_block)
+
+        def toc_spy(toc):
+            toc_calls.append(toc)
+            return orig_toc(toc)
+
+        def header_spy(data):
+            header_calls.append(data)
+            return orig_header(data)
+
+        monkeypatch.setattr(server, "source_row_specs", row_spy)
+        monkeypatch.setattr(server, "toc_item_specs", toc_spy)
+        monkeypatch.setattr(server, "header_fields", header_spy)
+
+        assert client.get("/view?path=test.md").status_code == 200
+        assert len(row_calls) == 1, "server render bypassed source_row_specs()"
+        assert len(toc_calls) == 1, "server render bypassed toc_item_specs()"
+        assert len(header_calls) == 1, "server render bypassed header_fields()"
+
+    def test_client_loads_the_same_module_the_server_imports(self, client):
+        """The browser executes view_specs.py verbatim — same bytes, same
+        behaviour, no mirrored JS copy to drift."""
+        import view_specs
+
+        resp = client.get("/py/view_specs.py")
+        assert resp.status_code == 200
+        assert resp.json()["source"] == Path(view_specs.__file__).read_text()
+
+    def test_rendered_rows_match_the_builder_specs(self, client):
+        """Every id/class/label in the served HTML comes from the specs."""
+        import server
+
+        payload = server.build_view_payload("test.md")
+        specs = server.source_row_specs(
+            payload["blocks"], payload["comments_by_block"]
+        )
+        html = client.get("/view?path=test.md").text
+        assert specs, "fixture must produce rows"
+        for spec in specs:
+            assert f'id="{spec["id"]}"' in html
+            assert f'class="{spec["rowClass"]}"' in html
+            assert f'data-line-start="{spec["startLine"]}"' in html
+            assert f'data-line-end="{spec["endLine"]}"' in html
+
+    def test_anchor_ids_still_derive_from_block_start_lines(self, client):
+        """The anchoring contract: id="L{start_line}", byte-identical to
+        before the port (a drift here orphans comments)."""
+        import server
+
+        payload = server.build_view_payload("test.md")
+        html = client.get("/view?path=test.md").text
+        for block in payload["blocks"]:
+            assert f'id="L{block["start_line"]}"' in html
+
+    def test_no_js_fallback_still_renders_rows_server_side(self, client):
+        """The port must not turn /view into a JS-only page."""
+        html = client.get("/view?path=test.md").text
+        assert 'class="source-line' in html
+        assert 'class="line-content"' in html
+        assert "<h1>" in html
+
+    def test_app_js_builds_rows_from_the_python_specs(self, client):
+        """The soft-swap path must call the warm runtime's spec builders."""
+        js = client.get("/static/app.js").text
+        assert "renderer.sourceRowSpecs" in js
+        assert "renderer.tocItemSpecs" in js
+        assert "renderer.headerFields" in js
+
+    def test_view_specs_imports_no_sibling_project_modules(self, client):
+        """Pyodide writes view_specs.py into a bare FS alongside renderer.py.
+        Stdlib imports are fine (renderer.py uses them); importing another
+        doc-review module that was never written to /home/pyodide is not."""
+        src = client.get("/py/view_specs.py").json()["source"]
+        siblings = {
+            p.stem for p in Path(__file__).parent.glob("*.py")
+        } - {"view_specs"}
+        for line in src.splitlines():
+            if not (line.startswith("import ") or line.startswith("from ")):
+                continue
+            module = line.split()[1].split(".")[0]
+            assert module not in siblings, (
+                f"view_specs.py imports sibling module {module!r}, which "
+                "Pyodide does not have on its filesystem"
+            )
+
+    def test_view_page_wires_up_the_python_spec_builders(self, client):
+        """Without this the bridge could be deleted and the suite would stay
+        green while the SPA silently degraded to full page loads."""
+        html = client.get("/view?path=test.md").text
+        assert "/py/view_specs.py" in html, "view page never loads view_specs.py"
+        assert "from view_specs import" in html
+        for fn in ("sourceRowSpecs", "tocItemSpecs", "headerFields"):
+            assert fn in html, f"warm runtime does not expose {fn}"
+
+    def test_view_specs_source_is_not_cacheable(self, client):
+        """A cached copy could run stale builder code against fresh server
+        markup — exactly the drift this shares the module to prevent."""
+        resp = client.get("/py/view_specs.py")
+        assert resp.headers["Cache-Control"] == "no-store"

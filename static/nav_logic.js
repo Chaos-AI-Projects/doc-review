@@ -39,61 +39,13 @@
         return /^#L\d+$/.test(hash || "") ? String(hash).slice(1) : null;
     }
 
-    function rowClass(commentCount) {
-        return "source-line" + (commentCount ? " has-comments" : "");
-    }
-
-    function lineLabel(block) {
-        return block.end_line !== block.start_line
-            ? block.start_line + "-" + block.end_line
-            : String(block.start_line);
-    }
-
-    /* Describe the source table rows for a rendered document. */
-    function sourceRowSpecs(blocks, commentsByBlock) {
-        var byBlock = commentsByBlock || {};
-        var specs = [];
-        for (var i = 0; i < (blocks || []).length; i++) {
-            var b = blocks[i];
-            var count = (byBlock[String(b.start_line)] || []).length;
-            specs.push({
-                id: "L" + b.start_line,
-                rowClass: rowClass(count),
-                startLine: b.start_line,
-                endLine: b.end_line,
-                label: lineLabel(b),
-                html: b.html,
-                commentCount: count,
-            });
-        }
-        return specs;
-    }
-
-    function tocItemSpecs(toc) {
-        var specs = [];
-        for (var i = 0; i < (toc || []).length; i++) {
-            var entry = toc[i];
-            specs.push({
-                className: "toc-item toc-level-" + entry.level,
-                href: "#L" + entry.start_line,
-                text: entry.text,
-            });
-        }
-        return specs;
-    }
-
-    /* Header + comment-form fields for a freshly loaded document.  The form
-     * fields must follow the new file or comments would be posted against the
-     * previously viewed one. */
-    function headerFields(data) {
-        return {
-            title: data.path,
-            fileIdLabel: String(data.file_id).slice(0, 12) + "\u2026",
-            documentTitle: "doc-review \u2014 " + data.path,
-            formFileId: data.file_id,
-            formPath: data.path,
-        };
-    }
+    /* The row/TOC/header render-spec builders that used to live here were
+     * ported to Python in view_specs.py (#451): the server-side Jinja render
+     * and the client soft swap now share one implementation, so they cannot
+     * drift.  They are reached through the warm Pyodide runtime
+     * (window.docReviewRenderer) — safe, because a soft swap only happens once
+     * the renderer is warm.  The routing logic below deliberately stays in JS:
+     * it decides what happens BEFORE the renderer is warm. */
 
     var api = {
         viewUrl: viewUrl,
@@ -101,11 +53,6 @@
         shouldIntercept: shouldIntercept,
         popstateAction: popstateAction,
         lineAnchorId: lineAnchorId,
-        rowClass: rowClass,
-        lineLabel: lineLabel,
-        sourceRowSpecs: sourceRowSpecs,
-        tocItemSpecs: tocItemSpecs,
-        headerFields: headerFields,
     };
 
     if (typeof module !== "undefined" && module.exports) {

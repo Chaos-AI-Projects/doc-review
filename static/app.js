@@ -310,9 +310,17 @@
     var sourceBody = document.querySelector("#source tbody");
     var navSeq = 0;  // guards against a slow response clobbering a newer one
 
+    /* A renderer is only "warm" once it can do everything a swap needs: render
+     * blocks AND build the row/TOC/header specs (the Python builders, #451).
+     * Anything less falls back to a full-page /view. */
     function warmRenderer() {
         var r = window.docReviewRenderer;
-        return r && typeof r.renderBlocks === "function" ? r : null;
+        if (!r) return null;
+        var needed = ["renderBlocks", "sourceRowSpecs", "tocItemSpecs", "headerFields"];
+        for (var i = 0; i < needed.length; i++) {
+            if (typeof r[needed[i]] !== "function") return null;
+        }
+        return r;
     }
 
     function setLineAttrs(el, spec) {
@@ -320,8 +328,8 @@
         el.setAttribute("data-line-end", spec.endLine);
     }
 
-    function buildSourceRows(blocks) {
-        var specs = navLogic.sourceRowSpecs(blocks, commentsData);
+    function buildSourceRows(renderer, blocks) {
+        var specs = renderer.sourceRowSpecs(blocks, commentsData);
         var frag = document.createDocumentFragment();
         for (var i = 0; i < specs.length; i++) {
             var spec = specs[i];
@@ -360,12 +368,12 @@
         return frag;
     }
 
-    function renderToc(toc) {
+    function renderToc(renderer, toc) {
         if (!fileNav) return;
         var existing = fileNav.querySelector(".toc-section");
         if (existing) existing.remove();
 
-        var specs = navLogic.tocItemSpecs(toc);
+        var specs = renderer.tocItemSpecs(toc);
         if (!specs.length) return;
 
         var section = document.createElement("div");
@@ -407,8 +415,8 @@
         }
     }
 
-    function updateHeader(data) {
-        var fields = navLogic.headerFields(data);
+    function updateHeader(renderer, data) {
+        var fields = renderer.headerFields(data);
         var title = document.querySelector(".file-header h1");
         if (title) title.textContent = fields.title;
         var fidEl = document.querySelector(".file-header .file-id");
@@ -427,13 +435,13 @@
         if (el) el.textContent = JSON.stringify(value);
     }
 
-    function applyDocument(data, blocks) {
+    function applyDocument(renderer, data, blocks) {
         commentsData = data.comments_by_block || {};
         currentPath = data.path;
-        updateHeader(data);
+        updateHeader(renderer, data);
         sourceBody.innerHTML = "";
-        sourceBody.appendChild(buildSourceRows(blocks));
-        renderToc(data.toc);
+        sourceBody.appendChild(buildSourceRows(renderer, blocks));
+        renderToc(renderer, data.toc);
         updateNavActive();
         document.querySelectorAll(".inline-comments").forEach(function (el) {
             el.remove();
@@ -474,7 +482,7 @@
             })
             .then(function (data) {
                 if (seq !== navSeq) return;  // superseded by a later click
-                applyDocument(data, renderer.renderBlocks(data.source));
+                applyDocument(renderer, data, renderer.renderBlocks(data.source));
                 if (push) {
                     history.pushState(
                         { path: path }, "", navLogic.viewUrl(path)

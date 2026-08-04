@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}doc-review — {{ path }}{% endblock %}
+{% block title %}{{ header.documentTitle }}{% endblock %}
 {% block content %}
 <div class="file-header">
-    <h1>{{ path }}</h1>
-    <span class="file-id" title="file_id">{{ file_id[:12] }}&hellip;</span>
+    <h1>{{ header.title }}</h1>
+    <span class="file-id" title="file_id">{{ header.fileIdLabel }}</span>
     <button class="file-nav-toggle" id="nav-toggle" title="Toggle file navigator">&#9776; Files</button>
     <span class="col-toggles">
         <button id="nav-col-toggle" class="col-toggle-btn" title="Toggle navigator column">&#9776; Nav</button>
@@ -17,13 +17,13 @@
     <nav class="file-nav" id="file-nav">
         <input type="text" class="file-nav-filter" id="nav-filter" placeholder="Filter files…" autocomplete="off">
         <div class="file-nav-tree" id="file-nav-tree"></div>
-        {% if toc %}
+        {% if toc_specs %}
         <div class="toc-section">
             <div class="toc-heading">Contents</div>
             <ul class="toc-list">
-            {% for entry in toc %}
-                <li class="toc-item toc-level-{{ entry.level }}">
-                    <a href="#L{{ entry.start_line }}" class="toc-link">{{ entry.text }}</a>
+            {% for item in toc_specs %}
+                <li class="{{ item.className }}">
+                    <a href="{{ item.href }}" class="toc-link">{{ item.text }}</a>
                 </li>
             {% endfor %}
             </ul>
@@ -41,14 +41,14 @@
         <!-- Source blocks -->
         <table class="source-lines" id="source">
             <tbody>
-            {% for block in blocks %}
-            <tr id="L{{ block.start_line }}" class="source-line{% if block.start_line in comments_by_block %} has-comments{% endif %}" data-line-start="{{ block.start_line }}" data-line-end="{{ block.end_line }}">
-                <td class="line-num" data-line-start="{{ block.start_line }}" data-line-end="{{ block.end_line }}">{{ block.start_line }}{% if block.end_line != block.start_line %}-{{ block.end_line }}{% endif %}</td>
-                <td class="line-content" data-line-start="{{ block.start_line }}" data-line-end="{{ block.end_line }}">{{ block.html | safe }}</td>
+            {% for spec in row_specs %}
+            <tr id="{{ spec.id }}" class="{{ spec.rowClass }}" data-line-start="{{ spec.startLine }}" data-line-end="{{ spec.endLine }}">
+                <td class="line-num" data-line-start="{{ spec.startLine }}" data-line-end="{{ spec.endLine }}">{{ spec.label }}</td>
+                <td class="line-content" data-line-start="{{ spec.startLine }}" data-line-end="{{ spec.endLine }}">{{ spec.html | safe }}</td>
                 <td class="line-marker">
-                    {% if block.start_line in comments_by_block %}
-                    <button class="marker-btn" data-line-start="{{ block.start_line }}" data-line-end="{{ block.end_line }}" title="{{ comments_by_block[block.start_line] | length }} comment(s)">
-                        {{ comments_by_block[block.start_line] | length }}
+                    {% if spec.commentCount %}
+                    <button class="marker-btn" data-line-start="{{ spec.startLine }}" data-line-end="{{ spec.endLine }}" title="{{ spec.commentCount }} comment(s)">
+                        {{ spec.commentCount }}
                     </button>
                     {% endif %}
                 </td>
@@ -69,8 +69,8 @@
 <!-- Comment form (hidden, cloned by JS) -->
 <template id="comment-form-tpl">
     <form class="comment-form" method="post" action="/comment">
-        <input type="hidden" name="file_id" value="{{ file_id }}">
-        <input type="hidden" name="path" value="{{ path }}">
+        <input type="hidden" name="file_id" value="{{ header.formFileId }}">
+        <input type="hidden" name="path" value="{{ header.formPath }}">
         <input type="hidden" name="line_start" value="">
         <input type="hidden" name="line_end" value="">
         <input type="hidden" name="parent_id" value="0">
@@ -149,11 +149,16 @@ async function initPyodideRenderer() {
         const micropip = pyodide.pyimport('micropip');
         await micropip.install('markdown-it-py');
 
-        // Load renderer.py into Pyodide
-        const resp = await fetch('/spike/renderer.py');
-        const data = await resp.json();
-        pyodide.FS.writeFile('/home/pyodide/renderer.py', data.source);
-        pyodide.runPython("import sys; sys.path.insert(0, '/home/pyodide'); from renderer import render_markdown_blocks");
+        // Load renderer.py and view_specs.py into Pyodide.  view_specs.py is
+        // the SAME module the server imports to build the Jinja markup (#451),
+        // so a soft swap cannot render differently from a fresh /view.
+        const [rendererSrc, specsSrc] = await Promise.all([
+            fetch('/spike/renderer.py').then((r) => r.json()),
+            fetch('/py/view_specs.py').then((r) => r.json()),
+        ]);
+        pyodide.FS.writeFile('/home/pyodide/renderer.py', rendererSrc.source);
+        pyodide.FS.writeFile('/home/pyodide/view_specs.py', specsSrc.source);
+        pyodide.runPython("import sys; sys.path.insert(0, '/home/pyodide'); from renderer import render_markdown_blocks; from view_specs import source_row_specs, toc_item_specs, header_fields");
 
         // Publish the warm runtime so app.js can re-render other files
         // without re-booting Pyodide (#447).
@@ -163,7 +168,31 @@ async function initPyodideRenderer() {
                 "import json; json.dumps(render_markdown_blocks(_source))"
             ));
         };
-        window.docReviewRenderer = { renderBlocks, initMermaid };
+        // JSON in/out keeps plain dicts on the Python side (no JsProxy) so the
+        // builders behave identically under CPython and Pyodide.  The Python
+        // snippets are fixed literals — never built from a variable, so there
+        // is no eval seam into runPython.
+        const SPEC_CALLS = {
+            source_row_specs: "import json; json.dumps(source_row_specs(*json.loads(_spec_arg)))",
+            toc_item_specs: "import json; json.dumps(toc_item_specs(*json.loads(_spec_arg)))",
+            header_fields: "import json; json.dumps(header_fields(*json.loads(_spec_arg)))",
+        };
+        const callSpecBuilder = (fn, args) => {
+            pyodide.globals.set('_spec_arg', JSON.stringify(args));
+            return JSON.parse(pyodide.runPython(SPEC_CALLS[fn]));
+        };
+        window.docReviewRenderer = {
+            renderBlocks,
+            initMermaid,
+            sourceRowSpecs: (blocks, commentsByBlock) =>
+                callSpecBuilder('source_row_specs', [blocks || null, commentsByBlock || null]),
+            tocItemSpecs: (toc) => callSpecBuilder('toc_item_specs', [toc || null]),
+            // Only the two fields the builder reads — passing the whole payload
+            // would ship the entire document across the bridge on every swap.
+            headerFields: (data) => callSpecBuilder(
+                'header_fields', [{ path: data.path, file_id: data.file_id }]
+            ),
+        };
 
         // Render blocks client-side from embedded raw source
         const source = JSON.parse(document.getElementById('source-data').textContent);

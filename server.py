@@ -35,6 +35,7 @@ from db import (
 )
 from file_id import derive_file_id
 from renderer import extract_toc, render_markdown_blocks
+from view_specs import header_fields, source_row_specs, toc_item_specs
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -318,10 +319,20 @@ def build_view_payload(path: str) -> dict:
 async def view_file(request: Request, path: str = Query(...)):
     """Render a file with per-line anchors and comments."""
     payload = build_view_payload(path)
+    # Row/TOC/header markup comes from the same Python builders the client
+    # runs after a soft swap (#451), so the two renders cannot drift.
     resp = templates.TemplateResponse(
         request,
         "view.html",
-        context={**payload, "files": _list_files(_source_root)},
+        context={
+            **payload,
+            "files": _list_files(_source_root),
+            "row_specs": source_row_specs(
+                payload["blocks"], payload["comments_by_block"]
+            ),
+            "toc_specs": toc_item_specs(payload["toc"]),
+            "header": header_fields(payload),
+        },
     )
     resp.headers["Cache-Control"] = "no-store"
     return resp
@@ -563,6 +574,24 @@ async def spike_renderer_source():
     """Serve renderer.py source for Pyodide to load verbatim."""
     source = (BASE_DIR / "renderer.py").read_text(encoding="utf-8")
     return JSONResponse(content={"source": source})
+
+
+# ── Shared Python modules served to the browser (#451) ──────────────────
+
+
+@app.get("/py/view_specs.py")
+async def view_specs_source():
+    """Serve view_specs.py source for Pyodide to load verbatim (#451).
+
+    The client executes the very module the server imports, so the soft-swap
+    markup and the Jinja markup are built by the same code.  ``no-store``
+    keeps that guarantee airtight: a cached copy could run stale builder code
+    against freshly rendered server markup.
+    """
+    source = (BASE_DIR / "view_specs.py").read_text(encoding="utf-8")
+    resp = JSONResponse(content={"source": source})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 # ── Entrypoint ──────────────────────────────────────────────────────────
