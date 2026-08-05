@@ -1963,6 +1963,382 @@ class TestPresentationRoundTwo:
         assert end in body, "could not find the end of %r" % start
         return body[: body.index(end)]
 
+    # A `/` in *operand* position opens a regular-expression literal; anywhere
+    # else it divides.  These are the characters and the keywords after which
+    # an operand is the only thing that can legally come next.
+    _OPERAND_CHARS = "(,=:[!&|?{};"
+    _OPERAND_KEYWORDS = frozenset(
+        "return throw typeof instanceof in of new delete void case do else"
+        " yield await".split()
+    )
+
+    @classmethod
+    def _blank_js_noise(cls, text):
+        """A same-length copy of `text` with comments and regular-expression
+        literals blanked to spaces.  String literals are left intact.
+
+        Same length, so callers can go on using offsets from the original — the
+        blanked copy is what to *scan*, the original is what to *slice*.
+
+        Braces are the load-bearing thing in this file, and a `{` that is only
+        prose or only a character class must not move the depth.  The #460
+        cycle-3 review reproduced two silent green bypasses through exactly
+        that hole: `var action = nav(e.key);  // maps a key to {action` and
+        `e.key.replace(/[{]/g, "")`, each of which raises the depth by one so
+        the handler's own `}` stops closing the slice, which then runs on into
+        a follower `setTimeout(function () { applyPresentationAction("exit") })`
+        that answers for a route dispatching inline.  `_strip_comments` cannot
+        close it: its `^\\s*//.*$` is whole-line only, and app.js carries ~44
+        trailing `//` comments, so the shape is idiomatic here.
+
+        Comments are recognised only outside a string, so `"http://x{"` stays a
+        string and `'// not a comment {'` stays a string.  That reading is only
+        ever as good as the quote state the scanner arrives with, which is why
+        the division branch below is strict about more than braces: the #460
+        cycle-6 review reproduced
+
+            var key = e.key + /[']/.source;  // don't remap the {action key
+
+        where the character class — read as division and so left unblanked —
+        opened a *spurious* string that closed on the apostrophe in `don't`.
+        Quote parity re-synchronised, the rest of the comment was scanned as
+        code, and its `{` moved the depth with nothing raised at all.
+
+        Regex literals: `/` is not decidable as regex-vs-division by a scanner
+        this size, so this takes the unambiguous half — a `/` in *operand*
+        position (directly after one of `_OPERAND_CHARS` or one of
+        `_OPERAND_KEYWORDS`, or at the very start) is a regex; every other `/`
+        divides.  Neither half is trusted silently, because *both* readings can
+        be wrong and either one re-shapes the slice:
+
+        * division misread as a regex cannot terminate on its line, which
+          raises in `_end_of_regex`;
+        * a regex misread as division stays in the scan, where its own
+          characters are then read as code — `/[{]/` moves the depth, `/[']/`
+          opens a string, `/[//]/` opens a comment.  The operand set cannot be
+          widened to cover it — `)` and `]` really do precede division
+          (`(a + b) / 2`, `xs[i] / 2`), so that trade only swaps a silent miss
+          for a wrong blank.  Instead the division branch asks whether the
+          would-be literal is *inert* — whether it holds anything this scanner
+          acts on — and raises if it does; see `_inert_span`.  Brace balance is
+          not a strong enough question: the span above is perfectly balanced,
+          and that is exactly the one that stayed silent.  Neither is the span
+          alone: the question is asked over one extra character of right
+          context, because a comment opener is two characters wide and can
+          straddle the span's closing `/` (`x /b/*{*/ }`, `x /b// {`).
+
+        So a `/` whose would-be literal carries a brace, a quote or a comment
+        opener is always loud, and that is the family every bypass reproduced
+        in this cycle belongs to.  The residual cost is real but narrow: a
+        genuine division followed on the same line by another `/`, with one of
+        those between them, has to be spelled unambiguously.  On the bundle as
+        shipped that cost is zero — app.js, nav_logic.js and style.css raise
+        nothing.
+
+        What is NOT closed, so that no one reads more into the guard than it
+        earns: inertness is a question about the span's *contents*, and the two
+        readings also differ in the operand-position state (`prev`/`prev_word`)
+        they leave behind.  The regex branch jumps past the literal with
+        `prev = ")"`; the division branch re-scans the literal's own characters,
+        and if the character before its closing `/` is an operand char that
+        closing `/` is itself read as an opener, blanking text OUTSIDE the span.
+        A differential fuzz of the two readings still finds silent
+        disagreements of that shape (`x /(/i)` before a backtick is the
+        smallest).  They need a `/` on both sides of an operand char inside one
+        line, none occur in the bundle, and closing them means simulating both
+        readings rather than asking a syntactic question — so they are left
+        open here, deliberately and on the record, rather than papered over.
+        """
+        out = list(text)
+        n = len(text)
+        i, quote, prev, prev_word = 0, None, "", ""
+        while i < n:
+            ch = text[i]
+            if quote:
+                if ch == "\\":
+                    i += 2
+                    continue
+                if ch == quote:
+                    quote, prev, prev_word = None, ch, ""
+                i += 1
+            elif ch in "\"'`":
+                quote = ch
+                i += 1
+            elif ch == "/" and text[i : i + 2] == "//":
+                while i < n and text[i] != "\n":
+                    out[i] = " "
+                    i += 1
+            elif ch == "/" and text[i : i + 2] == "/*":
+                end = text.find("*/", i + 2)
+                end = n if end < 0 else end + 2
+                for j in range(i, end):
+                    if text[j] != "\n":
+                        out[j] = " "
+                i = end
+            elif ch == "/" and (
+                prev_word in cls._OPERAND_KEYWORDS
+                or prev == ""
+                or (not prev_word and prev in cls._OPERAND_CHARS)
+            ):
+                end = cls._end_of_regex(text, i)
+                for j in range(i, end):
+                    out[j] = " "
+                # A regex literal is a value, so the next `/` divides.
+                i, prev, prev_word = end, ")", ""
+            elif ch == "/":
+                # Division, by the operand-position rule.  The other reading
+                # would have blanked the span; the two only agree when blanking
+                # it changes nothing this scanner can see.  Otherwise fail loud,
+                # the same way the regex branch does when it cannot terminate.
+                end = cls._regex_end(text, i)
+                # One character of right context, because the tokens this
+                # scanner acts on are up to two characters wide and it reads
+                # them at ABSOLUTE offsets: the span's own closing `/` pairs
+                # with whatever follows it, so `/b/` before `*{*/` is really a
+                # `/*` opener that a substring-only question cannot see.
+                active = None if end is None else cls._inert_span(text[i:end + 1])
+                if active is not None:
+                    raise AssertionError(
+                        "ambiguous `/` at offset %d (%r): read as division by "
+                        "the operand-position rule, but as a regular-expression "
+                        "literal it would span %r, and blanking that is not "
+                        "invisible to this scanner — it contains %r. A brace "
+                        "moves the depth the slices are counted with, a quote "
+                        "opens or closes a string literal, and a `//` or `/*` "
+                        "starts a comment; each of those re-shapes the slice, "
+                        "so the two readings disagree. This scanner is not a JS "
+                        "parser and will not guess between them — spell it "
+                        "unambiguously (a `new RegExp(\"…\")`, or parenthesise "
+                        "the division)."
+                        % (
+                            i,
+                            text[i : text.find("\n", i)],
+                            text[i:end],
+                            active,
+                        )
+                    )
+                prev, prev_word = ch, ""
+                i += 1
+            elif ch.isalnum() or ch in "_$":
+                word = i
+                while i < n and (text[i].isalnum() or text[i] in "_$"):
+                    i += 1
+                prev_word = text[word:i]
+                prev = prev_word[-1]
+            else:
+                if not ch.isspace():
+                    prev, prev_word = ch, ""
+                i += 1
+        return "".join(out)
+
+    @staticmethod
+    def _regex_end(text, start):
+        """The index just past the regex literal `text[start]` would open, or
+        `None` if no such literal terminates on that line.
+
+        `/` inside a `[…]` character class does not close the literal, and a
+        real one never spans a line.  Both readings of a `/` need this: the
+        regex branch to know what to blank, the division branch to know what it
+        would have blanked had it chosen the other way.
+        """
+        i, in_class = start + 1, False
+        while i < len(text):
+            ch = text[i]
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == "\n":
+                break
+            if in_class:
+                if ch == "]":
+                    in_class = False
+            elif ch == "[":
+                in_class = True
+            elif ch == "/":
+                i += 1
+                while i < len(text) and text[i].isalpha():  # flags
+                    i += 1
+                return i
+            i += 1
+        return None
+
+    # Everything this scanner reacts to: braces move the depth, quotes open and
+    # close string literals, and these two openers start a comment.  Both
+    # comment openers are two characters wide and are matched at absolute
+    # offsets, which is why callers must pass one character of right context —
+    # see `_inert_span`.
+    _ACTIVE_TOKENS = ("{", "}", '"', "'", "`", "//", "/*")
+
+    @classmethod
+    def _inert_span(cls, window):
+        """The first token in `window` this scanner would act on, or `None` if
+        there is none.
+
+        Callers pass the would-be regex literal PLUS one character of right
+        context.  The tokens are up to two characters wide and the scanner
+        matches them at absolute offsets, so one can straddle the span's right
+        edge: in `x /b/*{*/ }` the literal `/b/` holds nothing active, but its
+        closing `/` pairs with the following `*` to open a comment.  Asked
+        about `/b/` alone this answers `None`; asked about `/b/*` it answers
+        `/*`.  The #460 cycle-7 review reproduced both straddles (`/*` and
+        `//`) end to end, each moving the depth by a full brace in silence.
+
+        This is a wider question than brace balance.  The blanker is stateful
+        about quotes and comments as well as depth, so an unblanked span
+        re-syncing the quote state is just as much a disagreement as one moving
+        the depth — and it is the quieter of the two.  A brace-balanced `/[']/`
+        left in the scan opens a spurious string, which swallows an arbitrary
+        amount of what follows before some later apostrophe closes it; nothing
+        about that is loud.  So the span has to be *inert*, not merely balanced.
+
+        What `None` does and does not mean.  It means: no token this scanner
+        acts on lies inside the span or straddles its right edge — so the span
+        cannot, by its own contents, move the depth or open a string or a
+        comment.  It does NOT mean the two readings are indistinguishable in
+        general, and the stronger claim should not be made here.  The scanner
+        also carries operand-position state (`prev` / `prev_word`), and the two
+        readings leave it differently: the regex branch jumps to `end` with
+        `prev = ")"`, while the division branch re-scans the span's own
+        characters, so `prev` ends up as the span's last character or its flag
+        word.  That state decides how a LATER `/` is classified, and an inert
+        span can still reclassify one.  A differential fuzz over the two
+        readings (cycle-8) found the residual reachable — e.g. `x /(/i)` + a
+        backtick, where the span `/(/i` is inert but the re-scan reads its
+        closing `/` as an opener, because the `(` before it is an operand char,
+        and blanks text OUTSIDE the span.  That family is not closed here and
+        is not claimed to be; it is recorded in `_blank_js_noise`.
+
+        Deliberately one-directional: anything other than `None` is reported
+        rather than guessed at.  That rejects some genuine divisions (see
+        `_blank_js_noise`), which is the accepted side to be wrong on — those
+        fail loud and are spelled around, where the other side re-shapes a
+        slice in silence.
+        """
+        hits = [(window.index(t), t) for t in cls._ACTIVE_TOKENS if t in window]
+        return min(hits)[1] if hits else None
+
+    @classmethod
+    def _end_of_regex(cls, text, start):
+        """The index just past the regex literal opening at `text[start]`.
+
+        An unterminated one means this `/` was a division the operand-position
+        rule called wrong.  That fails loud here instead of blanking the rest of
+        the file out of the scan.
+        """
+        end = cls._regex_end(text, start)
+        if end is not None:
+            return end
+        raise AssertionError(
+            "unterminated regular-expression literal at offset %d (%r): a `/` "
+            "in operand position that never closes on its line is a division "
+            "this scanner read as a regex, and the slice cannot be trusted "
+            "until it is spelled unambiguously"
+            % (start, text[start : text.find("\n", start)])
+        )
+
+    @classmethod
+    def _through_matching_brace(cls, text, start):
+        """`text` from `start` through the `}` that closes the first `{` after
+        it.
+
+        A literal end marker cannot tell "the handler ended" from "something
+        later happened to close at the same indent", and that is a bypass
+        rather than a nicety: the #460 review reproduced the keyboard route
+        inlined with the suite still green, by closing the handler one level
+        out and following it with a `setTimeout(function () { … })` whose body
+        then answered for the route.  Matching braces ends the slice where the
+        handler actually ends, whatever follows it and however it is indented.
+
+        Depth is counted over `_blank_js_noise(text)`, so a `{` in a trailing
+        comment or in a regex character class cannot re-open the same hole; the
+        string handling stays here, because the count needs strings *present*
+        (see `_listener`) and only their braces ignored.
+        """
+        scan = cls._blank_js_noise(text)
+        assert "{" in scan[start:], "the listener has no body"
+        i = scan.index("{", start)
+        depth, quote = 0, None
+        while i < len(scan):
+            ch = scan[i]
+            if quote:  # a brace inside a string literal does not open a block
+                if ch == "\\":
+                    i += 2
+                    continue
+                if ch == quote:
+                    quote = None
+            elif ch in "\"'`":
+                quote = ch
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if not depth:
+                    return text[start : i + 1]
+            i += 1
+        raise AssertionError("the listener body is never closed")
+
+    @classmethod
+    def _listener(cls, text, event):
+        """The body of the one inline `document.addEventListener(<event>, function …)`.
+
+        Every guard here is owed to a review that *reproduced* a green bypass
+        of the keyboard route — the suite passing while the route's dispatch
+        had in fact been inlined:
+
+        * `function` is part of the start marker (#458), so naming the handler
+          fails as an unambiguous "is not in the bundle" rather than sliding
+          the slice onto whichever listener comes next;
+        * the slice ends at the handler's own closing brace, found by matching
+          braces rather than by a literal end marker (#460) — see
+          `_through_matching_brace`;
+        * the event NAME occurs exactly once in the bundle (#460).  A slice
+          takes the FIRST match, so a decoy can answer for a real route that
+          is registered in some other spelling — and every spelling has to
+          write the event name somewhere.  Counting the bare token instead of
+          one registration syntax is what closes that: the cycle-3 review
+          reproduced GREEN, real route inlined, with `var EV = "keydown"`, a
+          `` `keydown` `` template literal, an `on(el, ev, fn)` helper,
+          `document["onkeydown"] =`, and `addEventListener ("keydown"` with a
+          space — five spellings, one hole.
+
+        Counting happens after comments are stripped, so prose recording a
+        registration that used to live here is not read as a second route.
+
+        Two guards this replaces are gone rather than left dead: the
+        `addEventListener\\(<event>` count (subsumed — and with it the
+        whitespace disagreement it had with the alias guard below), and the
+        `on<event>\\s*=` assignment guard (subsumed by the optional `on`
+        prefix, which unlike that regex does not have to reach the `=` and so
+        also sees `document["onkeydown"]`).  The alias guard stays: a
+        registration whose event name is computed (`"key" + "down"`) writes no
+        token for the count to see.
+        """
+        text = cls._strip_comments(text, line_comments=True)
+        # `\b` would be wrong: `$` is an identifier character in JS and not in
+        # `\w`.  The optional `on` makes `onkeydown` one token, in any bracket
+        # spelling, rather than a substring the boundary would hide.
+        occurrences = re.findall(
+            r"(?<![A-Za-z0-9_$])(?:on)?%s(?![A-Za-z0-9_$])" % re.escape(event),
+            cls._blank_js_noise(text),
+        )
+        assert len(occurrences) == 1, (
+            "the token `%s` occurs %d times in the bundle, not once: a slice "
+            "takes the first match, so the second occurrence could be the real "
+            "route dispatching inline while this slice reads a decoy. Every "
+            "way of registering a listener has to name the event somewhere, "
+            "so this counts the name itself rather than one registration "
+            "syntax. A legitimate second `%s` listener would fail here too; "
+            "that is the accepted cost of the guard, not an oversight."
+            % (event, len(occurrences), event)
+        )
+        assert not re.search(r"addEventListener(?!\s*\()", text), (
+            "addEventListener is aliased or bound somewhere, so a registration "
+            "can be spelled in a way the count above cannot see"
+        )
+        start = 'document.addEventListener("%s", function' % event
+        assert start in text, "%r is not in the bundle" % start
+        return cls._through_matching_brace(text, text.index(start))
+
     @classmethod
     def _css_rules(cls, client, needle):
         """Every rule whose selector mentions `needle`, as (selector, body)."""
@@ -2015,8 +2391,8 @@ class TestPresentationRoundTwo:
         gesture.  An unhandled rejection would take presenting down with it;
         the fixed overlay has to remain a usable fallback."""
         js = self._app_js(marp_client)
-        request = js[js.index("function requestDeckFullscreen("):]
-        request = request[: request.index("\n    function ")]
+        request = self._between(
+            js, "function requestDeckFullscreen(", "\n    function ")
         assert ".catch(" in request, "the promise rejection path is unhandled"
         assert "catch (err)" in request, "a throwing/absent API is unhandled"
 
@@ -2031,9 +2407,10 @@ class TestPresentationRoundTwo:
         truth: release iff the fullscreen element IS our deck.
         """
         js = self._app_js(marp_client)
-        release = js[js.index("function releaseDeckFullscreen("):]
         release = self._strip_comments(
-            release[: release.index("\n    function ")], line_comments=True
+            self._between(
+                js, "function releaseDeckFullscreen(", "\n    function "),
+            line_comments=True,
         )
         gates = [ln for ln in release.splitlines() if "return;" in ln]
         assert gates, "the release has no early-out gate at all"
@@ -2049,6 +2426,9 @@ class TestPresentationRoundTwo:
         assert "deckFullscreen = false;" in release, (
             "the release never clears the flag it invalidates"
         )
+        assert "release.call(" in release, (
+            "the release never actually calls the exit API it looked up"
+        )
         assert release.index("deckFullscreen = false;") < release.index(
             "release.call("
         ), "the flag is cleared after the release it describes"
@@ -2061,16 +2441,20 @@ class TestPresentationRoundTwo:
         `true` behind — which would make onFullscreenChange treat an unrelated
         fullscreen exit as a reason to tear this deck down."""
         js = self._app_js(marp_client)
-        request = js[js.index("function requestDeckFullscreen("):]
         request = self._strip_comments(
-            request[: request.index("\n    function ")], line_comments=True
+            self._between(
+                js, "function requestDeckFullscreen(", "\n    function "),
+            line_comments=True,
         )
-        body = request[request.index("{") + 1:]
+        # `partition`, not `index`: _between has already established the
+        # function is here, so its body's opening brace cannot be missing — a
+        # guard for that would be unreachable, and this cannot raise anyway.
+        body = request.partition("{")[2]
         assert re.match(r"\s*deckFullscreen = false;", body), (
             "the flag is not reset as the first thing the enter path does"
         )
-        enter = js[js.index("function enterPresentation("):]
-        enter = enter[: enter.index("\n    function ")]
+        enter = self._between(
+            js, "function enterPresentation(", "\n    function ")
         assert "requestDeckFullscreen(deckEl)" in enter, (
             "entering no longer goes through the resetting request path"
         )
@@ -2090,9 +2474,11 @@ class TestPresentationRoundTwo:
         assert "body.presenting .file-header" not in self._css(marp_client)
 
     def test_the_deck_paints_above_the_page(self, marp_client):
-        css = self._css(marp_client)
-        deck = css[css.index(".presentation {"):]
-        deck = deck[: deck.index("}")]
+        # Through the guarded helper, like its siblings: a raw `.index()` on
+        # the selector raises `ValueError: substring not found` on a rename,
+        # which names nothing.  `_css_rule` fails as an assertion that says
+        # which selector went missing and what was found instead.
+        deck = self._css_rule(marp_client, ".presentation")
         z = re.search(r"z-index:\s*(\d+)", deck)
         assert z and int(z.group(1)) > 2, "the deck can still be painted over"
 
@@ -2120,15 +2506,380 @@ class TestPresentationRoundTwo:
         routes = (
             ("the pointer", self._between(
                 js, "function onControlClick(", "\n    }")),
-            ("the keyboard", self._between(
-                js, 'document.addEventListener("keydown"', "\n        });")),
+            ("the keyboard", self._listener(js, "keydown")),
             ("the browser's own fullscreen exit", self._between(
                 js, "function onFullscreenChange(", "\n    }")),
         )
         for name, body in routes:
-            assert "applyPresentationAction(" in body, (
-                "%s route does not funnel through the single dispatcher" % name
+            # Stripped: a commented-out call is not a call.
+            assert "applyPresentationAction(" in self._strip_comments(
+                body, line_comments=True
+            ), "%s route does not funnel through the single dispatcher" % name
+
+    def test_the_keyboard_slice_cannot_run_past_its_own_listener(self):
+        """The instrument the route test above leans on, pinned in its own
+        right.  The #458 review reproduced this GREEN against the merged tree:
+        name the keydown handler, dispatch inline inside it, and add one more
+        listener in the same block — `fullscreenchange` and
+        `docreview:renderer-ready` already live there, so that is routine.  The
+        slice then ran on into the *new* listener, found an
+        `applyPresentationAction(` in it, and pronounced the keyboard route
+        covered while its dispatch had in fact been inlined.
+
+        Asserted against synthetic bundles rather than app.js, so the guard is
+        pinned by what it rejects rather than by today's source happening to be
+        unambiguous.
+        """
+        inlined = (
+            '            if (action === "exit") exitPresentation();\n'
+            '            else if (action === "next") showSlide(slideIndex + 1);\n'
+            "            else showSlide(slideIndex - 1);\n"
+        )
+        sibling = (
+            '        document.addEventListener("visibilitychange", function () {\n'
+            '            applyPresentationAction("exit");\n'
+            "        });\n"
+        )
+        # The reviewer's reproduction verbatim.
+        named = (
+            "        function onDeckKeydown(e) {\n" + inlined + "        }\n"
+            '        document.addEventListener("keydown", onDeckKeydown);\n'
+            + sibling
+        )
+        with pytest.raises(AssertionError, match="is not in the bundle"):
+            self._listener(named, "keydown")
+
+        # The same bypass reached the other way: the handler stays inline but
+        # its closing brace is re-indented, so a literal end marker is not
+        # found until after whatever follows.  The slice must still stop at the
+        # handler, so the follower's call cannot be read as this route's.
+        # `sibling` is another listener; `stray` is NOT — the #460 review
+        # reproduced this shape green, because the guard that used to catch the
+        # overrun counted swallowed registrations and so only ever noticed the
+        # first kind.
+        stray = (
+            "        setTimeout(function () {\n"
+            '            applyPresentationAction("exit");\n'
+            "        });\n"
+        )
+        for follower in (sibling, stray):
+            reindented = (
+                '        document.addEventListener("keydown", function (e) {\n'
+                + inlined
+                + "    });\n"
+                + follower
             )
+            assert "applyPresentationAction(" not in self._listener(
+                reindented, "keydown"
+            ), "the slice ran past the handler and took the follower's call"
+
+        # The same overrun, re-opened by a single unbalanced `{` that is not
+        # code: a TRAILING `//` comment (which `_strip_comments` never sees —
+        # its regex is whole-line — and which app.js writes ~44 times), and a
+        # regex character class.  Both raise the depth by one, so the handler's
+        # own `}` stops closing the slice and `stray` answers for the route.
+        for noise in (
+            "            var action = nav(e.key);  // maps a key to {action\n",
+            '            var key = e.key.replace(/[{]/g, "");\n',
+        ):
+            unbalanced = (
+                '        document.addEventListener("keydown", function (e) {\n'
+                + noise
+                + inlined
+                + "        });\n"
+                + stray
+            )
+            assert "applyPresentationAction(" not in self._listener(
+                unbalanced, "keydown"
+            ), "a `{` outside code re-opened the overrun the matcher closes"
+
+        # …at every position the `/` can occupy, not just after `(`.  Whether a
+        # `/` opens a regex or divides is decided by what precedes it, and until
+        # the #460 cycle-4 review this suite only ever varied the *contents* of
+        # the literal — every fixture wrote it after `(`.  So a `/[{]/` after
+        # `=>`, `+`, `)` or `*` was read as division, left unblanked, and
+        # re-opened this exact overrun with the whole suite still green.
+        #
+        # The contract is that a `/` this scanner cannot place is LOUD: each
+        # construct below must either have its literal blanked, or raise.  What
+        # none of them may do is pass through silently with a `{` that still
+        # moves the depth, which is what lets `stray` answer for the route.
+        for construct in (
+            "var hasBrace = (s) => /[{]/.test(s);",    # after `=>`
+            'var hasBrace = "a" + /[{]/.source;',      # after `+`
+            "if (presenting) /[{]/.test(e.key);",      # after `)`
+            "var q = 2 * /[{]/.source.length;",        # after `*`
+            "throw /[{]/.source;",                     # after a keyword
+            'var key = e.key.replace(/[{]/g, "");',    # after `(`
+            "var re = /[{]/;",                         # after `=`
+            "var pair = [/[{]/, /[}]/];",              # after `[` and after `,`
+            "return /[{]/.test(e.key);",               # after `return`
+        ):
+            positioned = (
+                '        document.addEventListener("keydown", function (e) {\n'
+                "            " + construct + "\n"
+                + inlined
+                + "        });\n"
+                + stray
+                # The enclosing initialiser's own `}`.  Without it the extra
+                # depth simply runs off the end and every fixture below fails
+                # as "never closed" — loud, but not the failure being pinned.
+                # app.js registers this handler inside a function, so the
+                # unbalanced `{` is absorbed there and the slice closes late
+                # and QUIETLY, taking the follower's call with it.
+                + "    }\n"
+            )
+            try:
+                slice_ = self._listener(positioned, "keydown")
+            except AssertionError as exc:
+                # Loud is an acceptable answer, but only the deliberate kind:
+                # any other assertion here would mean the slice broke for an
+                # unrelated reason and this fixture stopped testing anything.
+                assert "ambiguous `/`" in str(exc), (
+                    "%r failed for an unintended reason: %s" % (construct, exc)
+                )
+                continue
+            assert "applyPresentationAction(" not in slice_, (
+                "a regex literal after %r was read as division, so its `{` "
+                "moved the depth and the slice took the follower's call"
+                % construct.split("/[")[0].strip()
+            )
+
+        # …and not only when the literal carries a brace.  Asking whether the
+        # would-be span was brace-*balanced* was not a strong enough question:
+        # the blanker is stateful about quotes and comments too, so a literal
+        # read as division re-shapes the scan whenever ANY of that state is
+        # inside it.  The contract is inertness — a `/` read as division raises
+        # unless blanking its span would be invisible to this scanner.
+        #
+        # Each span below is perfectly brace-balanced, so the brace question
+        # answered "fine" and each one passed through silently.
+        for span in ("/[']/", '/["]/', "/[`]/", "/[//]/", "/[/*]/"):
+            with pytest.raises(AssertionError, match="ambiguous `/`"):
+                self._blank_js_noise("var k = e.key + %s.source;\n" % span)
+
+        # …and not only when the token is INSIDE the span.  Asking about
+        # `text[i:end]` was still not the whole question: the tokens this
+        # scanner acts on are two characters wide and it matches them at
+        # ABSOLUTE offsets, so one can straddle the span's right edge.  The
+        # closing `/` of the would-be literal is the last character in the
+        # span, and it pairs with the character AFTER the span to form `//` or
+        # `/*` — invisible to a substring-only predicate, which duly answered
+        # "inert" while the two readings differed by a full brace.  The #460
+        # cycle-7 review reproduced both openers:
+        #
+        #   `a = x /b/*{*/ }`  division: depth -1   regex: depth 0
+        #   `a = x /b// {`     division: depth  0   regex: depth +1
+        #
+        # Neither raised.  The question therefore has to be asked over one
+        # character of right context, so no token the scanner acts on can
+        # straddle the edge unseen.
+        for straddle in ("var k = a /b/*{*/ }\n", "var k = a /b// {\n"):
+            with pytest.raises(AssertionError, match="ambiguous `/`"):
+                self._blank_js_noise(straddle)
+
+        # End to end, because the straddle is a slice bypass and not just a
+        # disagreement on paper.  In both shapes the reading this scanner
+        # actually takes is the WRONG one — it opens a comment where the regex
+        # reading opens none — and the comment then swallows the handler's own
+        # `});`, so the slice never closes there and runs on into `stray`.
+        #
+        # The two are pinned at different levels on purpose.  `_listener`
+        # strips block comments before the scanner ever runs, so a `/*`
+        # straddle is gone by then and only the `//` shape survives that far;
+        # the `/*` shape is pinned against `_through_matching_brace`, which is
+        # the instrument that actually counts the depth and which blanks the
+        # raw text.  Each must raise; what neither may do is hand back a slice
+        # with the follower's call in it.
+        straddling_line = (
+            '        document.addEventListener("keydown", function (e) {\n'
+            + inlined
+            + "            var k = a /b// });\n"
+            + stray
+            + "    }\n"
+        )
+        # The `*/` that closes the comment the division reading opens sits
+        # several lines below, so everything between — `});` included — is
+        # swallowed.
+        straddling_block = (
+            '        document.addEventListener("keydown", function (e) {\n'
+            "            var k = a /b/*\n" + inlined + "        });\n"
+            "        var ok = 1 /* */;\n" + stray + "    }\n"
+        )
+        marker = 'document.addEventListener("keydown", function'
+        for shape, slicer in (
+            (straddling_line, lambda t: self._listener(t, "keydown")),
+            (
+                straddling_block,
+                lambda t: self._through_matching_brace(t, t.index(marker)),
+            ),
+        ):
+            try:
+                slice_ = slicer(shape)
+            except AssertionError as exc:
+                assert "ambiguous `/`" in str(exc), (
+                    "the straddling-opener fixture failed for an unintended "
+                    "reason: %s" % exc
+                )
+                continue
+            assert "applyPresentationAction(" not in slice_, (
+                "a comment opener straddling the right edge of a would-be "
+                "regex literal was invisible to the inertness question, so the "
+                "division reading opened a comment that swallowed the "
+                "handler's own `}` and the slice took the follower's call"
+            )
+
+        # End to end, which is what makes the quote case a bypass rather than a
+        # curiosity — and it is the quiet one.  `/[']/` is balanced, so nothing
+        # raised; left unblanked, its `'` opened a *spurious* string that closed
+        # on the apostrophe in `don't`.  Quote parity re-synchronised there, so
+        # the REST of the comment was scanned as code — `{action` included — the
+        # depth moved by one, the handler's own `}` stopped closing the slice,
+        # and `stray` answered for a route dispatching inline.  (The even-quote
+        # shape, `/["]/`, never re-syncs and so fails loud downstream; this odd
+        # one is the silent one, and the one worth pinning by name.)
+        resyncing = (
+            '        document.addEventListener("keydown", function (e) {\n'
+            "            var k = e.key + /[']/.source;  // don't remap the {action\n"
+            + inlined
+            + "        });\n"
+            + stray
+            + "    }\n"
+        )
+        try:
+            slice_ = self._listener(resyncing, "keydown")
+        except AssertionError as exc:
+            assert "ambiguous `/`" in str(exc), (
+                "the re-syncing-quote fixture failed for an unintended "
+                "reason: %s" % exc
+            )
+        else:
+            assert "applyPresentationAction(" not in slice_, (
+                "a brace-balanced regex literal read as division left its "
+                "quote in the scan; it re-synced on `don't`, put the comment's "
+                "`{` back into the depth, and the slice took the follower's "
+                "call"
+            )
+
+        # …without the comment mode swallowing strings that merely look like
+        # comments.  Both braces below are inside string literals, so neither
+        # may move the depth and neither `//` may start a comment.
+        stringy = (
+            '        document.addEventListener("keydown", function (e) {\n'
+            '            var u = "http://example.test/x{";\n'
+            "            var s = '// not a comment {';\n"
+            "            applyPresentationAction(navLogic.presentationAction(e.key));\n"
+            "        });\n" + stray
+        )
+        slice_ = self._listener(stringy, "keydown")
+        assert "applyPresentationAction(navLogic" in slice_, (
+            "a brace inside a string ended the slice early"
+        )
+        assert "setTimeout(" not in slice_, (
+            "a `//` inside a string was read as a comment and hid a brace"
+        )
+
+        # And reached from the other side: a decoy registered AHEAD of the real
+        # route.  A slice takes the first match, so without a uniqueness guard
+        # the decoy answers for a route that is dispatching inline — and the
+        # bundle already registers `click` on `document` more than once, so a
+        # second listener for one event is not a contrived shape.
+        #
+        # The real route is spelled a different way each time: counting one
+        # literal spelling of the registration is what let the #460 review
+        # reproduce three of these green.
+        for real, complaint in (
+            (
+                '        document.addEventListener("keydown", onDeckKeydown);\n',
+                "a slice takes the first",
+            ),
+            (
+                '        window.addEventListener("keydown", function (e) {\n'
+                + inlined
+                + "        });\n",
+                "a slice takes the first",
+            ),
+            (  # single quotes: nothing in this repo enforces the double-quoted form
+                "        document.addEventListener('keydown', function (e) {\n"
+                + inlined
+                + "        });\n",
+                "a slice takes the first",
+            ),
+            (  # not an addEventListener registration at all
+                "        document.onkeydown = function (e) {\n"
+                + inlined
+                + "        };\n",
+                "occurs 2 times",
+            ),
+            (  # nor in a bracket spelling the old `on<event>\s*=` never reached
+                '        document["onkeydown"] = function (e) {\n'
+                + inlined
+                + "        };\n",
+                "occurs 2 times",
+            ),
+            (  # the event name held in a variable — no literal to count
+                '        var EV = "keydown";\n'
+                "        document.addEventListener(EV, function (e) {\n"
+                + inlined
+                + "        });\n",
+                "occurs 2 times",
+            ),
+            (  # a template literal, which the old `['\"]` class could not see
+                "        document.addEventListener(`keydown`, function (e) {\n"
+                + inlined
+                + "        });\n",
+                "occurs 2 times",
+            ),
+            (  # registered through a helper rather than directly
+                "        function on(el, ev, fn) { el.addEventListener(ev, fn); }\n"
+                '        on(document, "keydown", function (e) {\n'
+                + inlined
+                + "        });\n",
+                "occurs 2 times",
+            ),
+            (  # a space before the paren, which the old count demanded away
+                '        document.addEventListener ("keydown", function (e) {\n'
+                + inlined
+                + "        });\n",
+                "occurs 2 times",
+            ),
+            (  # the case the token count genuinely cannot see: a computed
+                # event name writes no token, so the alias guard has to carry
+                # it — this is why that guard was kept and the other two were
+                # deleted rather than left dead.
+                "        var addL = document.addEventListener.bind(document);\n"
+                '        addL("key" + "down", function (e) {\n'
+                + inlined
+                + "        });\n",
+                "aliased or bound",
+            ),
+        ):
+            decoy = (
+                '        document.addEventListener("keydown", function (e) {\n'
+                '            applyPresentationAction("exit");\n'
+                "        });\n" + real
+            )
+            with pytest.raises(AssertionError, match=complaint):
+                self._listener(decoy, "keydown")
+
+        # Prose is not a second route: the count runs on stripped source, so a
+        # comment recording a registration that used to be here is not read as
+        # one.  (The same reason the funnel assertion strips before looking.)
+        remembered = (
+            '        // document.addEventListener("keydown", oldHandler) lived here\n'
+            '        document.addEventListener("keydown", function (e) {\n'
+            "            applyPresentationAction(navLogic.presentationAction(e.key));\n"
+            "        });\n"
+        )
+        assert "applyPresentationAction(" in self._listener(remembered, "keydown")
+
+        # And the shape it must accept, so neither guard is vacuous.
+        intact = (
+            '        document.addEventListener("keydown", function (e) {\n'
+            "            applyPresentationAction(navLogic.presentationAction(e.key));\n"
+            "        });\n" + sibling
+        )
+        assert "applyPresentationAction(" in self._listener(intact, "keydown")
 
     def test_the_dispatcher_handles_every_action_explicitly(self, marp_client):
         """The dispatcher used to end in a bare `else` that navigated
@@ -2138,15 +2889,16 @@ class TestPresentationRoundTwo:
         be a no-op.
         """
         js = self._app_js(marp_client)
-        fn = js[js.index("function applyPresentationAction("):]
         fn = self._strip_comments(
-            fn[: fn.index("\n    function ")], line_comments=True
+            self._between(
+                js, "function applyPresentationAction(", "\n    function "),
+            line_comments=True,
         )
         # The vocabulary, read out of nav_logic rather than hardcoded: an
         # action added there with no branch here has to fail this test.
         nav = marp_client.get("/static/nav_logic.js").text
-        vocabulary = nav[nav.index("function presentationControlAction("):]
-        vocabulary = vocabulary[: vocabulary.index("default:")]
+        vocabulary = self._between(
+            nav, "function presentationControlAction(", "default:")
         actions = set(re.findall(r'case "([^"]+)":', vocabulary))
         assert actions, "the control action vocabulary was not located"
 
