@@ -1,5 +1,6 @@
 """Route-level tests for the doc-review FastAPI server."""
 
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import view_specs
 from server import app, configure
 
 
@@ -1910,3 +1912,184 @@ class TestPresentationMode:
             "block clicks still open the comment form while presenting"
         )
         assert "inline-comments" in js
+
+
+class TestPresentationRoundTwo:
+    """Fullscreen, on-screen controls and metadata gating (#455).
+
+    Fullscreen and touch cannot be exercised on this box — there is no headless
+    browser in the suite — so these are asset-level assertions over the code the
+    browser actually receives.  They are deliberately about *seams* (is the
+    fallback there, is there only one navigation path) rather than pixels; the
+    in-browser confirmation is the owner's.
+    """
+
+    @pytest.fixture
+    def marp_client(self, source_dir):
+        (Path(source_dir) / "deck.md").write_text(
+            "---\nmarp: true\n---\n\n# Slide one\n\n---\n\n# Slide two\n"
+        )
+        (Path(source_dir) / "notes.md").write_text(
+            "# Notes\n\n---\n\nmore notes\n"
+        )
+        configure(source_dir, Path(source_dir) / "test_comments.db")
+        return TestClient(app)
+
+    @staticmethod
+    def _app_js(client):
+        return client.get("/static/app.js").text
+
+    @staticmethod
+    def _css(client):
+        return client.get("/static/style.css").text
+
+    # ── 1. Real full screen ──
+
+    def test_the_deck_asks_for_real_fullscreen(self, marp_client):
+        """`position: fixed` covers the viewport but not the browser chrome."""
+        assert "requestFullscreen" in self._app_js(marp_client)
+
+    def test_a_rejected_fullscreen_request_does_not_break_presenting(
+        self, marp_client
+    ):
+        """requestFullscreen() returns a promise that can reject — denied,
+        unsupported (iOS Safari has no element fullscreen) or not from a user
+        gesture.  An unhandled rejection would take presenting down with it;
+        the fixed overlay has to remain a usable fallback."""
+        js = self._app_js(marp_client)
+        request = js[js.index("function requestDeckFullscreen("):]
+        request = request[: request.index("\n    function ")]
+        assert ".catch(" in request, "the promise rejection path is unhandled"
+        assert "catch (err)" in request, "a throwing/absent API is unhandled"
+
+    def test_leaving_fullscreen_externally_does_not_orphan_the_deck(
+        self, marp_client
+    ):
+        """The browser's own exit gesture must not leave a half-state."""
+        js = self._app_js(marp_client)
+        assert "fullscreenchange" in js, "the browser's own exit is not observed"
+        assert "fullscreenChangeAction" in js, "the decision is not shared logic"
+
+    def test_the_header_no_longer_sits_over_the_slides(self, marp_client):
+        """#452 raised .file-header to z-index: 2 while presenting, so the site
+        chrome painted over the deck.  A read-only deck has no reason to sit
+        under it."""
+        assert "body.presenting .file-header" not in self._css(marp_client)
+
+    def test_the_deck_paints_above_the_page(self, marp_client):
+        css = self._css(marp_client)
+        deck = css[css.index(".presentation {"):]
+        deck = deck[: deck.index("}")]
+        z = re.search(r"z-index:\s*(\d+)", deck)
+        assert z and int(z.group(1)) > 2, "the deck can still be painted over"
+
+    # ── 2. On-screen controls (the mobile ask) ──
+
+    def test_the_deck_carries_prev_next_and_exit_controls(self, marp_client):
+        """A phone has no arrow keys and no Esc."""
+        js = self._app_js(marp_client)
+        controls = js[js.index("var PRESENTATION_CONTROLS = ["):]
+        controls = controls[: controls.index("];")]
+        for action in ("prev", "next", "exit"):
+            assert '"%s"' % action in controls, f"no {action} control"
+
+    def test_the_controls_reuse_the_keyboard_navigation_path(self, marp_client):
+        """Pointer and keyboard must resolve through the SAME decision and the
+        same dispatcher.  A second navigation path is what would let a tap and
+        a keypress drift into disagreeing about what 'next' means."""
+        js = self._app_js(marp_client)
+        assert "presentationControlAction" in js, "controls bypass nav_logic"
+        assert "function applyPresentationAction(" in js, "no single dispatcher"
+        # Call sites, not mentions: the definition plus one per input route
+        # (keyboard, pointer, and the browser's own fullscreen exit).
+        calls = js.count("applyPresentationAction(") - 1
+        assert calls >= 3, f"only {calls} routes reach the dispatcher"
+
+    def test_there_is_no_whole_slide_click_to_advance(self, marp_client):
+        """Explicitly rejected: a tap anywhere would make an overflowing slide
+        impossible to scroll and text impossible to select on a phone, and it
+        would fight the explicit buttons that were asked for."""
+        js = self._app_js(marp_client)
+        # Quote-agnostic: a single-quoted listener would otherwise slip past.
+        for target in ("deck", "deckEl", "section", "bar"):
+            found = re.search(
+                target + r"""\.addEventListener\(\s*["']click["']""", js
+            )
+            assert not found, f"{target} advances the deck on any tap"
+        # The only click listener in the deck belongs to the controls.
+        assert 'btn.addEventListener("click", onControlClick)' in js
+
+    def test_the_controls_do_not_swallow_slide_content(self, marp_client):
+        """They overlay the slide; the slide stays scrollable and selectable."""
+        css = self._css(marp_client)
+        bar = css[css.index(".presentation-controls {"):]
+        bar = bar[: bar.index("}")]
+        assert "pointer-events: none" in bar
+
+    def test_the_controls_themselves_are_clickable(self, marp_client):
+        css = self._css(marp_client)
+        control = css[css.index(".presentation-control {"):]
+        control = control[: control.index("}")]
+        assert "pointer-events: auto" in control
+
+    def test_touch_targets_are_phone_sized(self, marp_client):
+        """>= 44px, the smallest reliable thumb target."""
+        css = self._css(marp_client)
+        control = css[css.index(".presentation-control {"):]
+        control = control[: control.index("}")]
+        for prop in ("min-width", "min-height"):
+            size = re.search(prop + r":\s*(\d+)px", control)
+            assert size, f"{prop} is not a pixel size"
+            assert int(size.group(1)) >= 44, f"{prop} is below a 44px target"
+
+    def test_the_controls_are_semi_transparent(self, marp_client):
+        """As asked: visible affordance without hiding the slide behind it."""
+        css = self._css(marp_client)
+        control = css[css.index(".presentation-control {"):]
+        control = control[: control.index("}")]
+        assert "opacity:" in control or "rgba(" in control
+
+    def test_the_controls_live_in_the_deck_so_they_leave_with_it(
+        self, marp_client
+    ):
+        """Presentation mode stays read-only: the controls are deck DOM, so
+        exiting removes them along with the slides — no stray chrome over the
+        review view."""
+        js = self._app_js(marp_client)
+        build = js[js.index("function buildDeck("):]
+        build = build[: build.index("\n    function showSlide")]
+        assert "buildControls()" in build
+
+    # ── 3. Metadata-gated availability ──
+
+    def test_a_declared_deck_still_offers_the_present_button(self, marp_client):
+        """The server ships the same builder the client runs, so the gate is
+        checked once, in Python."""
+        import server
+
+        payload = server.build_view_payload("deck.md")
+        specs = view_specs.presentation_specs(
+            payload["blocks"], None, payload["source"]
+        )
+        assert specs["available"] is True
+
+    def test_an_undeclared_multi_slide_file_no_longer_offers_it(
+        self, marp_client
+    ):
+        """Behavioural change: a prose document that happens to contain a `---`
+        rule used to get a Present button."""
+        import server
+
+        payload = server.build_view_payload("notes.md")
+        specs = view_specs.presentation_specs(
+            payload["blocks"], None, payload["source"]
+        )
+        assert len(specs["slides"]) == 2
+        assert specs["available"] is False
+
+    def test_review_mode_is_untouched_for_both(self, marp_client):
+        """Losing the Present button must not change how a file reads."""
+        for path in ("deck.md", "notes.md"):
+            html = marp_client.get("/view?path=" + path).text
+            assert 'class="source-line' in html
+            assert 'id="present-toggle"' in html

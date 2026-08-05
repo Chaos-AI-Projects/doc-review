@@ -557,6 +557,17 @@
     var deckSpecs = null;       // cached presentation_specs for that file
     var deckEl = null;
     var slideIndex = 0;
+    var deckFullscreen = false; // did requestFullscreen() actually take?
+
+    /* On-screen controls (#455).  A phone has no arrow keys and no Esc, so
+     * every keyboard action needs a pointer equivalent.  These action strings
+     * are the SAME vocabulary navLogic.presentationAction() produces for keys,
+     * and both routes end in the one dispatcher below. */
+    var PRESENTATION_CONTROLS = [
+        { action: "prev", glyph: "\u2039", label: "Previous slide" },
+        { action: "next", glyph: "\u203A", label: "Next slide" },
+        { action: "exit", glyph: "\u2715", label: "Exit presentation" },
+    ];
 
     function documentSource() {
         var el = document.getElementById("source-data");
@@ -590,6 +601,37 @@
         presentBtn.hidden = !(specs && specs.available);
     }
 
+    /* A control press is the pointer equivalent of a keypress, so it resolves
+     * through navLogic and lands in the same dispatcher.  The press stops here
+     * rather than bubbling: there is deliberately no whole-slide
+     * click-to-advance (#455) — a tap anywhere would make an overflowing slide
+     * impossible to scroll and text impossible to select on a phone. */
+    function onControlClick(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        applyPresentationAction(
+            navLogic.presentationControlAction(this.getAttribute("data-action"))
+        );
+    }
+
+    function buildControls() {
+        var bar = document.createElement("div");
+        bar.className = "presentation-controls";
+        for (var i = 0; i < PRESENTATION_CONTROLS.length; i++) {
+            var def = PRESENTATION_CONTROLS[i];
+            var btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "presentation-control control-" + def.action;
+            btn.setAttribute("data-action", def.action);
+            btn.setAttribute("aria-label", def.label);
+            btn.title = def.label;
+            btn.textContent = def.glyph;
+            btn.addEventListener("click", onControlClick);
+            bar.appendChild(btn);
+        }
+        return bar;
+    }
+
     function buildDeck(specs) {
         var deck = document.createElement("div");
         deck.className = "presentation theme-" + specs.theme;
@@ -620,6 +662,9 @@
             }
             deck.appendChild(section);
         }
+        // Part of the deck DOM, so they leave with it on exit — presenting
+        // stays read-only and no stray chrome survives over the review view.
+        deck.appendChild(buildControls());
         return deck;
     }
 
@@ -631,6 +676,73 @@
             sections[i].hidden = i !== slideIndex;
         }
         window.scrollTo(0, 0);
+    }
+
+    /* The ONE place a presentation action is carried out.  The keyboard
+     * handler and the on-screen controls both funnel through here, so the two
+     * input routes cannot drift into separate navigation paths.  Bounds are
+     * clampSlide's job, not this function's. */
+    function applyPresentationAction(action) {
+        if (!action) return;
+        if (action === "exit") exitPresentation();
+        else showSlide(slideIndex + (action === "next" ? 1 : -1));
+    }
+
+    function fullscreenElement() {
+        return document.fullscreenElement || document.webkitFullscreenElement || null;
+    }
+
+    /* Real full screen (#455): `position: fixed` covers the viewport but not
+     * the browser chrome.  Strictly an enhancement — requestFullscreen() can
+     * reject (denied, not from a user gesture) or be missing entirely (iOS
+     * Safari has no element fullscreen), and every one of those paths must
+     * leave the fixed overlay presenting normally rather than throw. */
+    function requestDeckFullscreen(el) {
+        deckFullscreen = false;
+        var request = el.requestFullscreen || el.webkitRequestFullscreen;
+        if (!request) return;
+        var result;
+        try {
+            result = request.call(el);
+        } catch (err) {
+            console.warn("Fullscreen unavailable, presenting as an overlay:", err);
+            return;
+        }
+        if (!result || typeof result.then !== "function") {
+            deckFullscreen = true;  // legacy, non-promise API
+            return;
+        }
+        result.then(function () {
+            // A resolve that lands after the deck is gone must not flag a
+            // presentation that already ended.
+            deckFullscreen = deckEl === el;
+        }).catch(function (err) {
+            deckFullscreen = false;
+            console.warn("Fullscreen unavailable, presenting as an overlay:", err);
+        });
+    }
+
+    function releaseDeckFullscreen() {
+        // Cleared first: the fullscreenchange this triggers is our own doing,
+        // not the browser dropping us out from under the deck.
+        deckFullscreen = false;
+        var release = document.exitFullscreen || document.webkitExitFullscreen;
+        // Gated on the DOM, not on the flag: a request still in flight has not
+        // set the flag yet, and skipping the release would strand the browser
+        // in fullscreen with no deck in it.
+        if (!release || fullscreenElement() !== deckEl) return;
+        try {
+            var result = release.call(document);
+            if (result && typeof result.catch === "function") {
+                result.catch(function () { /* already out */ });
+            }
+        } catch (err) { /* already out */ }
+    }
+
+    function onFullscreenChange() {
+        applyPresentationAction(navLogic.fullscreenChangeAction(
+            presenting, deckFullscreen, fullscreenElement()
+        ));
     }
 
     function enterPresentation() {
@@ -659,10 +771,15 @@
         presentBtn.classList.add("active");
         showSlide(0);
         deckEl.focus();
+        // Last, and only after the deck is on screen: the request must come
+        // from the click that got us here, and it must not be able to stop the
+        // deck from being shown.
+        requestDeckFullscreen(deckEl);
     }
 
     function exitPresentation() {
         if (!presenting && !deckEl) return;
+        releaseDeckFullscreen();
         if (deckEl) {
             deckEl.remove();
             deckEl = null;
@@ -688,9 +805,14 @@
             var action = navLogic.presentationAction(e.key);
             if (!action) return;
             e.preventDefault();
-            if (action === "exit") exitPresentation();
-            else showSlide(slideIndex + (action === "next" ? 1 : -1));
+            applyPresentationAction(action);
         });
+
+        // The browser can drop us out of fullscreen by its own gesture (Esc,
+        // system chrome).  Leaving the deck up but un-fullscreened would be a
+        // half-state, so treat it as leaving presentation mode.
+        document.addEventListener("fullscreenchange", onFullscreenChange);
+        document.addEventListener("webkitfullscreenchange", onFullscreenChange);
 
         // The Present button only makes sense once the Python builders are
         // reachable, which is when the Pyodide runtime finishes warming.

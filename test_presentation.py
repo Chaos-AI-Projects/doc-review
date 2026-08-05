@@ -249,19 +249,67 @@ class TestAnchorParity:
         )
 
 
-class TestPresentationSpecs:
-    def test_marp_document_offers_presentation_mode(self, marp_blocks):
+class TestAvailabilityIsMetadataGated:
+    """Availability requires an explicit ``marp: true`` declaration (#455).
+
+    #452 also offered presentation mode to anything already split into slides
+    (``len(slides) > 1``).  That is the half being dropped: presenting
+    arbitrary markdown makes no sense, and any prose document that happens to
+    contain two ``---`` rules is not a deck.  **This is a behavioural change** —
+    a file relying on the implicit multi-slide path loses its Present button.
+    """
+
+    def test_a_declared_deck_offers_presentation_mode(self, marp_blocks):
         assert presentation_specs(marp_blocks, None, MARP_DOC)["available"] is True
 
-    def test_multi_slide_document_offers_presentation_mode(self):
-        """No front matter, but it is clearly a deck."""
+    def test_multi_slide_document_without_front_matter_does_not(self):
+        """The dropped fallback.  The document still *groups* into slides — it
+        simply is not offered, because nothing declared it a presentation."""
         source = "# One\n\n---\n\n# Two\n"
         blocks = render_markdown_blocks(source)
-        assert presentation_specs(blocks, None, source)["available"] is True
+        specs = presentation_specs(blocks, None, source)
+        assert len(specs["slides"]) == 2
+        assert specs["available"] is False
 
     def test_ordinary_document_does_not_offer_presentation_mode(self, plain_blocks):
         assert presentation_specs(plain_blocks, None, PLAIN_DOC)["available"] is False
 
+    def test_front_matter_without_a_marp_directive_does_not(self):
+        """Metadata alone is not a declaration; the directive is."""
+        source = "---\ntitle: Notes\n---\n\n# One\n\n---\n\n# Two\n"
+        blocks = render_markdown_blocks(source)
+        assert presentation_specs(blocks, None, source)["available"] is False
+
+    def test_marp_false_does_not(self):
+        source = "---\nmarp: false\n---\n\n# One\n\n---\n\n# Two\n"
+        blocks = render_markdown_blocks(source)
+        assert presentation_specs(blocks, None, source)["available"] is False
+
+    def test_the_declaration_is_case_insensitive(self):
+        source = "---\nmarp: True\n---\n\n# One\n"
+        blocks = render_markdown_blocks(source)
+        assert presentation_specs(blocks, None, source)["available"] is True
+
+    def test_a_declared_single_slide_deck_is_still_offered(self):
+        """The author said it is a deck; a one-slide deck is their call."""
+        source = "---\nmarp: true\n---\n\n# Only one\n"
+        blocks = render_markdown_blocks(source)
+        specs = presentation_specs(blocks, None, source)
+        assert len(specs["slides"]) == 1
+        assert specs["available"] is True
+
+    def test_a_declared_deck_with_no_slides_is_not_offered(self):
+        """A declaration is necessary, not sufficient: a file whose front
+        matter swallows the whole document has nothing to present, and the
+        Present button would be dead (``enterPresentation`` bails on an empty
+        deck)."""
+        source = "---\nmarp: true\n---\n"
+        specs = presentation_specs(render_markdown_blocks(source), None, source)
+        assert specs["slides"] == []
+        assert specs["available"] is False
+
+
+class TestPresentationSpecs:
     def test_theme_comes_from_the_front_matter(self, marp_blocks):
         assert presentation_specs(marp_blocks, None, MARP_DOC)["theme"] == "default"
 

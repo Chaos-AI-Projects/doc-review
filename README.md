@@ -21,7 +21,7 @@ cd doc-review && pytest -v
 - **Storage:** SQLite (`comments.db`) for block-anchored comments
 - **File identity:** git blob object id for git-tracked files; path+content SHA-256 fallback
 - **Rendering:** Markdown source parsed by markdown-it-py into blocks, rendered to HTML with per-block anchors and TOC
-- **Presentation mode:** Marp-shaped markdown (`---` slide breaks + front-matter directives) presented as slides — a client-side grouping of the *same* blocks review mode renders, so comments keep their anchors across a mode flip. Read-only; `Esc` returns to review
+- **Presentation mode:** Marp-shaped markdown (`---` slide breaks + front-matter directives) presented as slides — a client-side grouping of the *same* blocks review mode renders, so comments keep their anchors across a mode flip. Offered only for a document whose front matter declares `marp: true`. Opens full screen where the browser allows it, falling back to a fixed overlay otherwise. Read-only; `Esc` or the on-screen exit control returns to review, arrow keys or the on-screen arrows move between slides
 - **Responsive:** Desktop = sidebar; mobile = inline expandable panels
 
 ## Project Structure

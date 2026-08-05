@@ -124,6 +124,66 @@ assert("going back past the first slide stays put",
     nav.clampSlide(-1, 3), 0);
 assert("an empty deck clamps to 0", nav.clampSlide(2, 0), 0);
 
+// ── On-screen controls (#455) ──
+//
+// A phone has no arrow keys and no Esc, so the deck carries prev/next/exit
+// buttons.  They resolve to the SAME action vocabulary presentationAction()
+// produces for keys, and app.js funnels both through one dispatcher — a second
+// navigation path is exactly what would let pointer and keyboard drift apart.
+
+assert("the prev control goes back",
+    nav.presentationControlAction("prev"), "prev");
+assert("the next control advances",
+    nav.presentationControlAction("next"), "next");
+assert("the exit control leaves presentation mode",
+    nav.presentationControlAction("exit"), "exit");
+assert("an unknown control name is inert",
+    nav.presentationControlAction("advance"), null);
+assert("a missing data-action is inert",
+    nav.presentationControlAction(null), null);
+assert("an empty data-action is inert",
+    nav.presentationControlAction(""), null);
+
+// Every keyboard action must have a pointer equivalent, or a phone user can
+// reach a state they cannot get out of.  The key list is read out of the
+// module source rather than hardcoded here: a key added to presentationAction()
+// with no pointer twin has to fail this, and a hardcoded list would not notice.
+var navSource = require("fs").readFileSync(
+    path.join(__dirname, "static", "nav_logic.js"), "utf8");
+var keyboardSwitch = navSource.slice(
+    navSource.indexOf("function presentationAction("),
+    navSource.indexOf("function presentationControlAction(")
+);
+var handledKeys = (keyboardSwitch.match(/case "[^"]*":/g) || [])
+    .map(function (c) { return c.slice(6, -2); });
+
+assert("the keyboard switch was actually located",
+    handledKeys.length >= 10, true);
+for (var k = 0; k < handledKeys.length; k++) {
+    var keyAction = nav.presentationAction(handledKeys[k]);
+    assert("key " + JSON.stringify(handledKeys[k]) + " -> " + keyAction +
+        " has a pointer equivalent",
+        nav.presentationControlAction(keyAction), keyAction);
+}
+
+// ── Fullscreen (#455) ──
+//
+// requestFullscreen() may be denied, unsupported (iOS Safari has no element
+// fullscreen) or rejected outside a user gesture, in which case the deck stays
+// a fixed overlay.  When it DID take and the browser then drops us out by its
+// own gesture, the deck must not be left half-presented.
+
+assert("leaving fullscreen while presenting exits the deck",
+    nav.fullscreenChangeAction(true, true, null), "exit");
+assert("entering fullscreen is not an exit",
+    nav.fullscreenChangeAction(true, true, {}), null);
+assert("a fullscreen change while not presenting is ignored",
+    nav.fullscreenChangeAction(false, true, null), null);
+assert("the overlay fallback is not dragged out by a foreign fullscreen change",
+    nav.fullscreenChangeAction(true, false, null), null);
+assert("another element going fullscreen does not exit the deck",
+    nav.fullscreenChangeAction(true, false, {}), null);
+
 // ── Render-spec builders moved to Python (#451) ──
 //
 // sourceRowSpecs / tocItemSpecs / headerFields / rowClass / lineLabel now live

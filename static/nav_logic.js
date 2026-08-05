@@ -61,6 +61,39 @@
         }
     }
 
+    /* Presentation mode (#455): what a press on an on-screen control means.
+     * A phone has no arrow keys and no Esc, so the deck also carries prev /
+     * next / exit buttons.  They resolve into the SAME vocabulary
+     * presentationAction() produces for keys — app.js then funnels both
+     * through one dispatcher, so a tap and a keypress cannot drift into
+     * disagreeing about what "next" does.  An unrecognised data-action is
+     * inert rather than a guess. */
+    function presentationControlAction(name) {
+        switch (name) {
+        case "next":
+        case "prev":
+        case "exit":
+            return name;
+        default:
+            return null;
+        }
+    }
+
+    /* Presentation mode (#455): what a `fullscreenchange` means.
+     * "exit" | null (null = leave the deck as it is).
+     *
+     * Entering fullscreen is an enhancement that can be denied, unsupported
+     * (iOS Safari has no element fullscreen) or rejected outside a user
+     * gesture, in which case the deck presents as a fixed overlay and no
+     * fullscreen state is ours to lose — hence `usedFullscreen`.  When it DID
+     * take and the browser then drops us out by its own gesture (Esc, the
+     * system chrome), the deck must leave presentation mode rather than sit in
+     * a half-state under the site header. */
+    function fullscreenChangeAction(presenting, usedFullscreen, fullscreenElement) {
+        if (!presenting || !usedFullscreen) return null;
+        return fullscreenElement ? null : "exit";
+    }
+
     /* Keep a slide index inside the deck; advancing off either end stays put
      * rather than wrapping (a wrap mid-talk looks like a lost slide). */
     function clampSlide(index, count) {
@@ -84,6 +117,8 @@
         popstateAction: popstateAction,
         lineAnchorId: lineAnchorId,
         presentationAction: presentationAction,
+        presentationControlAction: presentationControlAction,
+        fullscreenChangeAction: fullscreenChangeAction,
         clampSlide: clampSlide,
     };
 

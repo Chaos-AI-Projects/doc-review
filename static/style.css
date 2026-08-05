@@ -467,18 +467,67 @@ main { padding: 1rem; }
  * the comment column is hidden and the comment UI is unmounted by app.js.
  */
 body.presenting { overflow: hidden; }
-body.presenting .file-header { position: relative; z-index: 2; }
 
+/* The deck covers the page, site header included (#455).  v1 raised
+ * .file-header to z-index: 2 while presenting, which painted the site chrome
+ * over the slides; a read-only deck has no reason to sit under it.  The header
+ * lives outside .view-layout, so hiding the layout does not hide it. */
 .presentation {
     position: fixed;
     inset: 0;
     background: #fff;
-    z-index: 1;
+    z-index: 100;
     display: flex;
     align-items: center;
     justify-content: center;
     outline: none;
 }
+/* Real full screen is requested by app.js; :fullscreen only has to keep the
+ * theme background, since the browser paints its own backdrop behind it. */
+.presentation:fullscreen { background: #fff; }
+.presentation.theme-gaia:fullscreen { background: #fffefb; }
+
+/* On-screen controls (#455): the pointer equivalent of the keyboard actions,
+ * for phones where there is no arrow key and no Esc.  The bar spans the deck
+ * but is inert, so it cannot swallow slide content — the slide underneath
+ * stays scrollable and selectable; only the buttons take pointer events. */
+.presentation-controls {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.presentation-control {
+    position: absolute;
+    pointer-events: auto;
+    /* >= 44px: the smallest reliably tappable target on a phone. */
+    min-width: 48px;
+    min-height: 48px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    color: #fff;
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+    /* Semi-transparent, as asked — but carried by the background alone, never
+     * by a group `opacity`, which would fade the white glyph along with the
+     * circle.  White on rgba(0,0,0,.5) over the deck's white background is
+     * ~3.9:1, clear of the 3:1 floor for a UI control.  A phone has no hover
+     * and no focus before the first tap, so the resting state is the only one
+     * that counts: these controls exist *because* the reporter could not
+     * navigate on a phone, and an invisible control is the same bug again. */
+    background: rgba(0, 0, 0, 0.5);
+    transition: background-color 0.15s ease;
+}
+.presentation-control:hover,
+.presentation-control:focus { background: rgba(0, 0, 0, 0.8); outline: none; }
+
+/* Along the edges, over the slide's own padding: prev/next fall under the
+ * thumbs, exit stays clear of .slide-number in the bottom-right corner. */
+.presentation-control.control-prev { left: .75rem; top: 50%; transform: translateY(-50%); }
+.presentation-control.control-next { right: .75rem; top: 50%; transform: translateY(-50%); }
+.presentation-control.control-exit { right: .75rem; top: .75rem; }
 
 .presentation .slide {
     position: relative;  /* anchors .slide-number */

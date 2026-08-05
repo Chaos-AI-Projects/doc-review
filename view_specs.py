@@ -162,10 +162,14 @@ def presentation_specs(blocks, comments_by_block=None, source=""):
     slides = slide_specs(blocks, comments_by_block)
     theme = directives.get("theme", "")
     return {
-        # Offered for a declared deck, or for anything already split into
-        # slides.  A one-slide document would just be review mode with the
-        # comment UI taken away.
-        "available": directives.get("marp", "").lower() == "true" or len(slides) > 1,
+        # Metadata-gated (#455): presenting arbitrary markdown makes no sense,
+        # so the deck must be *declared*.  v1 also offered it to anything that
+        # happened to split into more than one slide, which handed a Present
+        # button to any prose document containing two `---` rules.
+        # The declaration is necessary but not sufficient — front matter that
+        # swallows the whole file leaves nothing to present, and the button
+        # would be dead.
+        "available": directives.get("marp", "").lower() == "true" and bool(slides),
         # Lands in a CSS class name, so it may only ever be one of ours.
         "theme": theme if theme in PRESENTATION_THEMES else "default",
         "paginate": directives.get("paginate", "").lower() == "true",
