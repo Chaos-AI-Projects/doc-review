@@ -1943,6 +1943,64 @@ class TestPresentationRoundTwo:
     def _css(client):
         return client.get("/static/style.css").text
 
+    @staticmethod
+    def _strip_comments(text, line_comments=False):
+        """Assertions are about code, not about prose describing it — a comment
+        naming `opacity:` must neither satisfy nor trip a check on
+        declarations."""
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        if line_comments:  # JS only; a CSS `url(http://…)` is not a comment
+            text = re.sub(r"^\s*//.*$", "", text, flags=re.M)
+        return text
+
+    @staticmethod
+    def _between(text, start, end):
+        """The source of one function or listener, by its opening and closing
+        markers.  Missing either is a failure in its own right: the route being
+        asserted on would have been renamed out from under the test."""
+        assert start in text, "%r is not in the bundle" % start
+        body = text[text.index(start):]
+        assert end in body, "could not find the end of %r" % start
+        return body[: body.index(end)]
+
+    @classmethod
+    def _css_rules(cls, client, needle):
+        """Every rule whose selector mentions `needle`, as (selector, body)."""
+        css = cls._strip_comments(cls._css(client))
+        return [
+            (sel.strip(), body)
+            for sel, body in re.findall(r"([^{}]*)\{([^{}]*)\}", css)
+            if needle in sel
+        ]
+
+    @classmethod
+    def _css_rule(cls, client, selector):
+        """The body of exactly one rule, by its full selector."""
+        rules = dict(cls._css_rules(client, selector))
+        assert selector in rules, (
+            "no `%s` rule of its own — found %s" % (selector, sorted(rules))
+        )
+        return rules[selector]
+
+    @staticmethod
+    def _relative_luminance(rgb):
+        """WCAG 2.x relative luminance of an 8-bit sRGB triple."""
+        linear = []
+        for value in rgb:
+            c = value / 255.0
+            linear.append(
+                c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+            )
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    @classmethod
+    def _contrast(cls, rgb_a, rgb_b):
+        """WCAG 2.x contrast ratio, order-independent."""
+        darker, lighter = sorted(
+            (cls._relative_luminance(rgb_a), cls._relative_luminance(rgb_b))
+        )
+        return (lighter + 0.05) / (darker + 0.05)
+
     # ── 1. Real full screen ──
 
     def test_the_deck_asks_for_real_fullscreen(self, marp_client):
@@ -1961,6 +2019,61 @@ class TestPresentationRoundTwo:
         request = request[: request.index("\n    function ")]
         assert ".catch(" in request, "the promise rejection path is unhandled"
         assert "catch (err)" in request, "a throwing/absent API is unhandled"
+
+    def test_the_fullscreen_release_is_gated_on_the_dom_not_the_flag(
+        self, marp_client
+    ):
+        """`deckFullscreen` is set *asynchronously* — requestFullscreen()
+        resolves after the deck is already on screen.  Exiting in that window
+        (a fast Esc, a control tap) with the release gated on the flag skips
+        exitFullscreen() while the request lands anyway, stranding the browser
+        in fullscreen with no deck in it.  The DOM is the only synchronous
+        truth: release iff the fullscreen element IS our deck.
+        """
+        js = self._app_js(marp_client)
+        release = js[js.index("function releaseDeckFullscreen("):]
+        release = self._strip_comments(
+            release[: release.index("\n    function ")], line_comments=True
+        )
+        gates = [ln for ln in release.splitlines() if "return;" in ln]
+        assert gates, "the release has no early-out gate at all"
+        assert any("fullscreenElement() !== deckEl" in ln for ln in gates), (
+            "the release is not gated on the DOM"
+        )
+        assert not any("deckFullscreen" in ln for ln in gates), (
+            "the release is gated on a flag the in-flight request has not set "
+            "yet, so a fast exit strands the browser in fullscreen"
+        )
+        # Cleared BEFORE exitFullscreen(), so the fullscreenchange this
+        # triggers reads as our own doing rather than the browser dropping us.
+        assert "deckFullscreen = false;" in release, (
+            "the release never clears the flag it invalidates"
+        )
+        assert release.index("deckFullscreen = false;") < release.index(
+            "release.call("
+        ), "the flag is cleared after the release it describes"
+
+    def test_a_second_presentation_does_not_inherit_the_fullscreen_flag(
+        self, marp_client
+    ):
+        """The enter path resets `deckFullscreen` before asking, so a request
+        that is denied (or never answered) cannot leave the previous run's
+        `true` behind — which would make onFullscreenChange treat an unrelated
+        fullscreen exit as a reason to tear this deck down."""
+        js = self._app_js(marp_client)
+        request = js[js.index("function requestDeckFullscreen("):]
+        request = self._strip_comments(
+            request[: request.index("\n    function ")], line_comments=True
+        )
+        body = request[request.index("{") + 1:]
+        assert re.match(r"\s*deckFullscreen = false;", body), (
+            "the flag is not reset as the first thing the enter path does"
+        )
+        enter = js[js.index("function enterPresentation("):]
+        enter = enter[: enter.index("\n    function ")]
+        assert "requestDeckFullscreen(deckEl)" in enter, (
+            "entering no longer goes through the resetting request path"
+        )
 
     def test_leaving_fullscreen_externally_does_not_orphan_the_deck(
         self, marp_client
@@ -2000,10 +2113,51 @@ class TestPresentationRoundTwo:
         js = self._app_js(marp_client)
         assert "presentationControlAction" in js, "controls bypass nav_logic"
         assert "function applyPresentationAction(" in js, "no single dispatcher"
-        # Call sites, not mentions: the definition plus one per input route
-        # (keyboard, pointer, and the browser's own fullscreen exit).
-        calls = js.count("applyPresentationAction(") - 1
-        assert calls >= 3, f"only {calls} routes reach the dispatcher"
+        # Per route, not a tally: a count cannot say WHICH route dropped out,
+        # and a route that keeps asking nav_logic but then dispatches inline —
+        # the second navigation path this test exists to prevent — leaves the
+        # count looking merely smaller.
+        routes = (
+            ("the pointer", self._between(
+                js, "function onControlClick(", "\n    }")),
+            ("the keyboard", self._between(
+                js, 'document.addEventListener("keydown"', "\n        });")),
+            ("the browser's own fullscreen exit", self._between(
+                js, "function onFullscreenChange(", "\n    }")),
+        )
+        for name, body in routes:
+            assert "applyPresentationAction(" in body, (
+                "%s route does not funnel through the single dispatcher" % name
+            )
+
+    def test_the_dispatcher_handles_every_action_explicitly(self, marp_client):
+        """The dispatcher used to end in a bare `else` that navigated
+        *backwards*, so any action without a branch here — a new `first` bound
+        to Home, say — would silently step back instead of doing nothing.  Each
+        action nav_logic can emit needs its own branch, and anything else must
+        be a no-op.
+        """
+        js = self._app_js(marp_client)
+        fn = js[js.index("function applyPresentationAction("):]
+        fn = self._strip_comments(
+            fn[: fn.index("\n    function ")], line_comments=True
+        )
+        # The vocabulary, read out of nav_logic rather than hardcoded: an
+        # action added there with no branch here has to fail this test.
+        nav = marp_client.get("/static/nav_logic.js").text
+        vocabulary = nav[nav.index("function presentationControlAction("):]
+        vocabulary = vocabulary[: vocabulary.index("default:")]
+        actions = set(re.findall(r'case "([^"]+)":', vocabulary))
+        assert actions, "the control action vocabulary was not located"
+
+        handled = set(re.findall(r'action === "([^"]+)"', fn))
+        assert actions <= handled, (
+            "no explicit branch for %s" % sorted(actions - handled)
+        )
+        # No fall-through: navigation only happens under an explicit test.
+        assert not re.search(r"else\s*(\{[^}]*)?showSlide", fn), (
+            "an unrecognised action still falls through to navigation"
+        )
 
     def test_there_is_no_whole_slide_click_to_advance(self, marp_client):
         """Explicitly rejected: a tap anywhere would make an overflowing slide
@@ -2043,11 +2197,59 @@ class TestPresentationRoundTwo:
             assert int(size.group(1)) >= 44, f"{prop} is below a 44px target"
 
     def test_the_controls_are_semi_transparent(self, marp_client):
-        """As asked: visible affordance without hiding the slide behind it."""
-        css = self._css(marp_client)
-        control = css[css.index(".presentation-control {"):]
-        control = control[: control.index("}")]
-        assert "opacity:" in control or "rgba(" in control
+        """As asked: visible affordance without hiding the slide behind it.
+
+        `opacity:` alone used to satisfy this, which is exactly what let the
+        invisible variant through — see the contrast test below.  Transparency
+        has to come from the background, so the glyph keeps its own alpha.
+        """
+        assert "rgba(" in self._css_rule(marp_client, ".presentation-control")
+
+    def test_the_controls_stay_visible_against_the_slide(self, marp_client):
+        """These controls exist *because* the reporter could not navigate on a
+        phone, so an invisible control is the same bug again.  Round two first
+        shipped a group `opacity: .35` over `background: rgba(0,0,0,.55)`: the
+        group opacity fades the white glyph along with the circle, compositing
+        to ~1.57:1 — well under the 3:1 floor WCAG 1.4.11 sets for a non-text
+        UI control.  A phone has no hover and no pre-tap focus, so the resting
+        state is the only one that counts.
+
+        No headless browser needed: the resting contrast is fully determined by
+        the two declarations asserted on here.
+        """
+        rules = self._css_rules(marp_client, ".presentation-control")
+        assert rules, "the control rules were not located"
+
+        # (a) Transparency is carried by the background alone.  A group
+        # `opacity` applies to the glyph too, so darkening the circle can never
+        # compensate for it — hence no `opacity` in ANY state of the control.
+        for selector, body in rules:
+            assert not re.search(r"(^|[\s;])opacity\s*:", body), (
+                "`%s` fades the glyph along with the circle" % selector
+            )
+
+        # (b) White glyph on the resting circle, composited over the deck's
+        # white slide (the worst case: any darker backdrop only helps), clears
+        # the 3:1 floor.
+        control = self._css_rule(marp_client, ".presentation-control")
+        assert re.search(r"color:\s*#fff\b", control), (
+            "the glyph is not the white this contrast is computed for"
+        )
+        bg = re.search(
+            r"background:\s*rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*"
+            r"([\d.]+)\s*\)",
+            control,
+        )
+        assert bg, "the resting control has no rgba background"
+        alpha = float(bg.group(4))
+        composited = [
+            alpha * int(bg.group(i)) + (1 - alpha) * 255 for i in (1, 2, 3)
+        ]
+        ratio = self._contrast(composited, (255, 255, 255))
+        assert ratio >= 3.0, (
+            "the resting control composites to %.2f:1 on a white slide, under "
+            "the 3:1 floor for a non-text UI control" % ratio
+        )
 
     def test_the_controls_live_in_the_deck_so_they_leave_with_it(
         self, marp_client

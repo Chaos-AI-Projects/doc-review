@@ -157,8 +157,11 @@ var keyboardSwitch = navSource.slice(
 var handledKeys = (keyboardSwitch.match(/case "[^"]*":/g) || [])
     .map(function (c) { return c.slice(6, -2); });
 
+// A lower bound loose enough to survive a legitimate shrink (dropping the
+// legacy "Spacebar"/"Esc" aliases, say): this guards against slicing nothing
+// out, not against the switch getting smaller.
 assert("the keyboard switch was actually located",
-    handledKeys.length >= 10, true);
+    handledKeys.length >= 3, true);
 for (var k = 0; k < handledKeys.length; k++) {
     var keyAction = nav.presentationAction(handledKeys[k]);
     assert("key " + JSON.stringify(handledKeys[k]) + " -> " + keyAction +

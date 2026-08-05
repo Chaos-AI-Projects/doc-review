@@ -683,9 +683,12 @@
      * input routes cannot drift into separate navigation paths.  Bounds are
      * clampSlide's job, not this function's. */
     function applyPresentationAction(action) {
-        if (!action) return;
         if (action === "exit") exitPresentation();
-        else showSlide(slideIndex + (action === "next" ? 1 : -1));
+        else if (action === "next") showSlide(slideIndex + 1);
+        else if (action === "prev") showSlide(slideIndex - 1);
+        // Anything else — null, or an action added to nav_logic without a
+        // branch here — is a no-op.  A trailing `else` would instead make a
+        // new action silently navigate backwards.
     }
 
     function fullscreenElement() {
