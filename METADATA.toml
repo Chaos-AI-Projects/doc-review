@@ -2,5 +2,5 @@
 name = "doc-review"
 
 [[actions]]
-name = "subtree-push"
-command = "scripts/subtree-push.sh doc-review"
+name = "copybara-sync"
+command = "scripts/copybara-sync.sh doc-review"
