@@ -640,7 +640,11 @@
         for (var i = 0; i < specs.slides.length; i++) {
             var slide = specs.slides[i];
             var section = document.createElement("section");
-            section.className = "slide";
+            // Already whitelisted by view_specs, the one builder behind both
+            // a fresh /view and this soft-swapped Pyodide render (#462).
+            // Nothing here inspects the name; a JS-side fallback would be a
+            // second, divergent home for the whitelist.
+            section.className = "slide layout-" + slide.layout;
             section.setAttribute("data-slide", slide.index);
 
             for (var j = 0; j < slide.rows.length; j++) {

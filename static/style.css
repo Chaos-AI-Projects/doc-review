@@ -574,6 +574,33 @@ body.presenting { overflow: hidden; }
 .presentation.theme-uncover { background: #fff; text-align: center; }
 .presentation.theme-uncover .slide { align-items: center; }
 
+/* Per-slide layouts, from a Marp `<!-- _class: … -->` directive (#462), and
+ * constrained to this set by view_specs.PRESENTATION_LAYOUTS.  `default` gets
+ * no rule of its own on purpose: the base `.slide` block above IS the default,
+ * so a slide with no directive looks exactly as it did before #462. */
+.presentation .slide.layout-title { text-align: center; }
+.presentation .slide.layout-title h1 { font-size: 3.2em; margin-bottom: 0.2em; }
+.presentation .slide.layout-title h2 { font-size: 1.5em; font-weight: normal; }
+/* Subtitle weight without hiding it: #57606a on white is 4.6:1. */
+.presentation .slide.layout-title p { font-size: 1.15em; color: #57606a; }
+
+/* `.slide` is a flex column, so centring needs the cross axis too — text-align
+ * alone leaves each block stretched the full width. */
+.presentation .slide.layout-centered { text-align: center; align-items: center; }
+
+/* Uniform across the slide, deliberately.  `buildDeck` gives every row its own
+ * `div.slide-block`, so two paragraphs on a slide are never siblings: a
+ * positional rule meaning "the attribution line" (`p:last-of-type`) would in
+ * fact match every paragraph.  Singling one out needs a marker in the DOM that
+ * does not exist, and inventing one is Phase 2 work. */
+.presentation .slide.layout-quote p {
+    font-size: 1.5em;
+    font-style: italic;
+    line-height: 1.5;
+    border-left: 4px solid #d0d7de;
+    padding-left: 0.8em;
+}
+
 /* Front matter shown as metadata rather than a bogus setext heading (#452). */
 pre.front-matter {
     background: #f6f8fa;

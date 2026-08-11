@@ -28,6 +28,16 @@ It must not change (cf. the 2026-07-22 comment-loss incident).
 # value falls back to "default" rather than reaching a class attribute.
 PRESENTATION_THEMES = ("default", "gaia", "uncover")
 
+# Per-slide layouts presentation mode ships CSS for (#462).  Same rule as the
+# themes above: the name lands in a class attribute, so only ours may reach it.
+PRESENTATION_LAYOUTS = ("default", "title", "centered", "quote")
+
+# The two Marp spellings of the layout directive.  They differ only in scope:
+# the leading underscore marks a "spot" directive, which applies to the slide
+# it sits on and no other; the bare form is global and carries forward.
+_SPOT_LAYOUT = "_class"
+_GLOBAL_LAYOUT = "class"
+
 
 def row_class(comment_count):
     """CSS classes for a source row, flagged when it carries comments."""
@@ -86,11 +96,16 @@ def toc_item_specs(toc):
     ]
 
 
-def _append_slide(slides, rows):
+def _append_slide(slides, rows, layout):
     """Append a slide unless it would be blank (leading/adjacent breaks)."""
     if rows:
         slides.append(
-            {"index": len(slides), "number": len(slides) + 1, "rows": rows}
+            {
+                "index": len(slides),
+                "number": len(slides) + 1,
+                "layout": layout,
+                "rows": rows,
+            }
         )
 
 
@@ -107,6 +122,51 @@ def _is_slide_break(block):
     return block.get("type") == "hr" and set(block.get("raw", "").strip()) == {"-"}
 
 
+def comment_directives(block):
+    """Marp directives carried by *block*, or ``{}`` if it carries none.
+
+    Read from ``raw``, never from ``html``.  The parser runs with
+    ``html: False`` (``renderer.py``), so an HTML comment is not invisible
+    here — it arrives as an ordinary ``paragraph`` whose html is the *escaped*
+    comment text, which is why a real Marp deck used to render its own
+    directives as visible body text on the slide.
+
+    A block counts as a directive block only when it is a ``paragraph``, is
+    entirely one HTML comment, every line inside it reads ``key: value``, and
+    at least one key is a directive this module acts on.  An ordinary comment
+    (``<!-- TODO: later -->``) is deliberately left alone: swallowing every
+    comment would delete document content on the strength of a guess, and that
+    block carries a comment anchor like any other.
+
+    The ``type`` check is structural for the same reason ``_is_slide_break``
+    checks it: a directive *shown as an example* is content.  Indented code
+    keeps its indentation in ``raw`` but strips to a bare comment, so the text
+    alone cannot tell a directive from a deck documenting one.
+    """
+    if block.get("type") != "paragraph":
+        return {}
+    raw = (block.get("raw") or "").strip()
+    if not (raw.startswith("<!--") and raw.endswith("-->")):
+        return {}
+    directives = {}
+    for line in raw[len("<!--") : -len("-->")].split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        key, sep, value = line.partition(":")
+        if not sep or not key.strip():
+            return {}
+        directives[key.strip().lower()] = value.strip()
+    if _SPOT_LAYOUT not in directives and _GLOBAL_LAYOUT not in directives:
+        return {}
+    return directives
+
+
+def _layout_name(name):
+    """Whitelist a layout name on its way into a CSS class (cf. ``theme``)."""
+    return name if name in PRESENTATION_LAYOUTS else "default"
+
+
 def slide_specs(blocks, comments_by_block=None):
     """Group the review-mode rows into slides (#452).
 
@@ -116,19 +176,31 @@ def slide_specs(blocks, comments_by_block=None):
     an identical line range, and therefore an identical ``id="L{start_line}"``
     comment anchor, in both modes.
 
-    The breaks themselves are delimiters and front matter is metadata, so
-    neither becomes slide content.
+    The breaks themselves are delimiters, and front matter and ``_class``
+    directive blocks are metadata, so none of them becomes slide content.
+    Dropping a block is safe; renumbering one is not, so nothing here touches
+    a line range.
     """
     specs = source_row_specs(blocks, comments_by_block)
     slides = []
     rows = []
+    spot = ""     # this slide only, cleared at every break
+    global_ = ""  # carries forward until another `class:` replaces it
     for block, spec in zip(blocks or [], specs):
         if _is_slide_break(block):
-            _append_slide(slides, rows)
+            _append_slide(slides, rows, _layout_name(spot or global_))
             rows = []
-        elif block.get("type") != "front_matter":
-            rows.append(spec)
-    _append_slide(slides, rows)
+            spot = ""
+            continue
+        if block.get("type") == "front_matter":
+            continue
+        directives = comment_directives(block)
+        if directives:
+            spot = directives.get(_SPOT_LAYOUT, spot)
+            global_ = directives.get(_GLOBAL_LAYOUT, global_)
+            continue
+        rows.append(spec)
+    _append_slide(slides, rows, _layout_name(spot or global_))
     return slides
 
 
@@ -155,8 +227,9 @@ def front_matter_directives(source):
 def presentation_specs(blocks, comments_by_block=None, source=""):
     """Everything the client needs to present a document as slides (#452).
 
-    v1 honours the global ``marp`` / ``theme`` / ``paginate`` directives only —
-    no per-slide ``_class``.
+    Honours the global ``marp`` / ``theme`` / ``paginate`` front-matter
+    directives, plus the per-slide ``_class`` / ``class`` layout directives
+    each slide carries on its own spec (#462).
     """
     directives = front_matter_directives(source)
     slides = slide_specs(blocks, comments_by_block)

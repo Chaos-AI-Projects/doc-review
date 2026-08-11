@@ -16,6 +16,8 @@ import pytest
 
 from renderer import render_markdown_blocks
 from view_specs import (
+    PRESENTATION_LAYOUTS,
+    comment_directives,
     front_matter_directives,
     presentation_specs,
     slide_specs,
@@ -397,3 +399,283 @@ class TestPyodideBridgeContract:
         assert self._via_bridge(
             presentation_specs, [marp_blocks, None, MARP_DOC]
         ) == presentation_specs(marp_blocks, None, MARP_DOC)
+
+    def test_layouts_survive_the_round_trip(self, layout_blocks):
+        assert [
+            slide["layout"]
+            for slide in self._via_bridge(slide_specs, [layout_blocks, None])
+        ] == EXPECTED_LAYOUTS
+
+
+# ── Per-slide layouts via Marp `_class` directives (#462) ──
+#
+# One deck covering the whole scoping matrix.  Marp has two forms and they
+# scope differently: `_class` is a *spot* directive (this slide only) and
+# `class` is global (this slide and every one after it, until overridden).
+# Getting that backwards leaks a title layout across an entire deck.
+LAYOUT_DOC = "\n".join(
+    [
+        "---",                              # 1
+        "marp: true",                       # 2
+        "---",                              # 3
+        "",                                 # 4
+        "<!-- _class: title -->",           # 5
+        "",                                 # 6
+        "# Slide one",                      # 7
+        "",                                 # 8
+        "---",                              # 9
+        "",                                 # 10
+        "# Slide two",                      # 11
+        "",                                 # 12
+        "---",                              # 13
+        "",                                 # 14
+        "<!-- class: quote -->",            # 15
+        "",                                 # 16
+        "# Slide three",                    # 17
+        "",                                 # 18
+        "---",                              # 19
+        "",                                 # 20
+        "# Slide four",                     # 21
+        "",                                 # 22
+        "---",                              # 23
+        "",                                 # 24
+        "<!-- _class: centered -->",        # 25
+        "",                                 # 26
+        "# Slide five",                     # 27
+        "",                                 # 28
+        "---",                              # 29
+        "",                                 # 30
+        "# Slide six",                      # 31
+        "",                                 # 32
+        "---",                              # 33
+        "",                                 # 34
+        "<!-- _class: nonesuch -->",        # 35
+        "",                                 # 36
+        "# Slide seven",                    # 37
+        "",                                 # 38
+        "---",                              # 39
+        "",                                 # 40
+        "<!-- TODO: an ordinary comment -->",  # 41
+        "",                                 # 42
+        "# Slide eight",                    # 43
+        "",                                 # 44
+        "---",                              # 45
+        "",                                 # 46
+        "<!-- class: title",                # 47
+        "_paginate: false -->",             # 48
+        "",                                 # 49
+        "# Slide nine",                     # 50
+        "",                                 # 51
+    ]
+)
+
+EXPECTED_LAYOUTS = [
+    "title",     # 1: spot directive
+    "default",   # 2: the spot directive did not leak forward
+    "quote",     # 3: persistent directive takes effect on its own slide
+    "quote",     # 4: …and carries forward
+    "centered",  # 5: a spot directive outranks the persistent one
+    "quote",     # 6: …without cancelling it
+    "default",   # 7: unknown name is rejected, not passed through
+    "quote",     # 8: an ordinary HTML comment is not a directive
+    "title",     # 9: a later persistent directive replaces the earlier one
+]
+
+
+@pytest.fixture
+def layout_blocks():
+    return render_markdown_blocks(LAYOUT_DOC)
+
+
+class TestCommentDirectives:
+    """Reading directives out of a block.
+
+    The parser runs with ``html: False``, so an HTML comment is **not**
+    invisible here: it arrives as a ``paragraph`` whose html is the *escaped*
+    comment text.  Before #462 a real Marp deck therefore rendered its own
+    directives as visible body text.  The directives have to be read from
+    ``raw`` and the block dropped, or the fix is only half done.
+    """
+
+    @staticmethod
+    def _block(source):
+        blocks = render_markdown_blocks(source)
+        assert len(blocks) == 1, blocks
+        return blocks[0]
+
+    def test_a_directive_comment_is_not_invisible_to_the_parser(self):
+        """The premise of the whole change — if this ever fails, comments have
+        become real HTML and the suppression below is dead code."""
+        block = self._block("<!-- _class: title -->\n")
+        assert block["type"] == "paragraph"
+        assert "_class" in block["html"]
+
+    def test_a_spot_directive_is_read_from_raw(self):
+        assert comment_directives(self._block("<!-- _class: title -->\n")) == {
+            "_class": "title"
+        }
+
+    def test_a_persistent_directive_is_read_from_raw(self):
+        assert comment_directives(self._block("<!-- class: quote -->\n")) == {
+            "class": "quote"
+        }
+
+    def test_a_multi_line_directive_comment_is_read_whole(self):
+        assert comment_directives(
+            self._block("<!-- class: quote\n_paginate: false -->\n")
+        ) == {"class": "quote", "_paginate": "false"}
+
+    def test_an_ordinary_comment_is_not_a_directive(self):
+        """Decided (issue constraint 4): only comments naming a directive we
+        act on are swallowed.  Treating every comment as a directive would
+        silently delete content on the strength of a guess."""
+        assert comment_directives(self._block("<!-- TODO: later -->\n")) == {}
+
+    def test_prose_is_not_a_directive(self):
+        assert comment_directives(self._block("just a paragraph\n")) == {}
+
+    def test_a_comment_with_trailing_prose_is_not_a_directive(self):
+        """Half a directive block is not a directive block; dropping it would
+        take the prose with it."""
+        assert comment_directives(
+            self._block("<!-- _class: title --> and some text\n")
+        ) == {}
+
+    def test_a_comment_with_a_non_directive_line_is_not_a_directive(self):
+        """Same rule, the multi-line spelling — the riskier one, because the
+        prose is *inside* the comment and would leave with it."""
+        assert comment_directives(
+            self._block("<!-- _class: title\nand some prose -->\n")
+        ) == {}
+
+    def test_an_indented_code_block_is_not_a_directive(self):
+        """Structural, like ``_is_slide_break``: a directive *shown as an
+        example* is content.  Indented code keeps its indentation in ``raw``
+        but strips to a bare comment, so text alone cannot tell the two
+        apart — and swallowing it deletes a code sample from the slide."""
+        block = self._block("    <!-- _class: title -->\n")
+        assert block["type"] == "code_block"
+        assert comment_directives(block) == {}
+
+    def test_a_fenced_code_block_is_not_a_directive(self):
+        block = self._block("```\n<!-- _class: title -->\n```\n")
+        assert block["type"] == "fence"
+        assert comment_directives(block) == {}
+
+
+class TestLayoutScoping:
+    def test_every_slide_carries_a_layout(self, layout_blocks):
+        slides = slide_specs(layout_blocks)
+        assert [slide["layout"] for slide in slides] == EXPECTED_LAYOUTS
+
+    def test_a_deck_without_directives_is_all_default(self, marp_blocks):
+        assert [s["layout"] for s in slide_specs(marp_blocks)] == [
+            "default",
+            "default",
+            "default",
+        ]
+
+    def test_a_spot_directive_does_not_leak_to_the_next_slide(self):
+        source = "---\nmarp: true\n---\n\n<!-- _class: title -->\n\n# A\n\n---\n\n# B\n"
+        slides = slide_specs(render_markdown_blocks(source))
+        assert [s["layout"] for s in slides] == ["title", "default"]
+
+    def test_a_persistent_directive_applies_to_its_own_slide_too(self):
+        source = "<!-- class: quote -->\n\n# A\n\n---\n\n# B\n"
+        slides = slide_specs(render_markdown_blocks(source))
+        assert [s["layout"] for s in slides] == ["quote", "quote"]
+
+    def test_an_unknown_layout_falls_back_to_default(self):
+        """The name lands in a CSS class, exactly like ``theme``; an arbitrary
+        document string must never reach a class attribute."""
+        source = '<!-- _class: ../../evil "x -->\n\n# A\n'
+        slides = slide_specs(render_markdown_blocks(source))
+        assert [s["layout"] for s in slides] == ["default"]
+
+    def test_every_shipped_layout_is_reachable(self):
+        """A whitelist entry with no way to select it is a dead layout."""
+        for layout in PRESENTATION_LAYOUTS:
+            source = "<!-- _class: %s -->\n\n# A\n" % layout
+            slides = slide_specs(render_markdown_blocks(source))
+            assert slides[0]["layout"] == layout
+
+    def test_presentation_specs_carry_the_layouts(self):
+        specs = presentation_specs(
+            render_markdown_blocks(LAYOUT_DOC), None, LAYOUT_DOC
+        )
+        assert [s["layout"] for s in specs["slides"]] == EXPECTED_LAYOUTS
+
+
+class TestDirectiveBlockSuppression:
+    """A directive block is metadata, so it is dropped from the slide exactly
+    as ``front_matter`` is — but *dropped*, never renumbered."""
+
+    def test_a_directive_block_is_not_slide_content(self, layout_blocks):
+        html = " ".join(row["html"] for row in _rows(slide_specs(layout_blocks)))
+        assert "_class" not in html
+        assert "class: quote" not in html
+
+    def test_an_ordinary_comment_still_renders(self, layout_blocks):
+        """Constraint 4: an unrecognised comment keeps today's behaviour rather
+        than being silently swallowed."""
+        html = " ".join(row["html"] for row in _rows(slide_specs(layout_blocks)))
+        assert "TODO: an ordinary comment" in html
+
+    def test_line_ranges_are_unchanged_by_suppression(self, layout_blocks):
+        """The 2026-07-22 comment-loss guard, at the point of maximum risk:
+        dropping a block must not shift the block after it."""
+        kept = {
+            (row["startLine"], row["endLine"])
+            for row in _rows(slide_specs(layout_blocks))
+        }
+        review = {
+            (row["startLine"], row["endLine"])
+            for row in source_row_specs(layout_blocks)
+        }
+        assert kept <= review
+        # Only the front matter, the eight breaks and the four directive blocks
+        # are absent; every other block survives with its own range.
+        assert review - kept == {
+            (1, 3),    # front matter
+            (5, 5),    # <!-- _class: title -->
+            (9, 9),    # ---
+            (13, 13),  # ---
+            (15, 15),  # <!-- class: quote -->
+            (19, 19),  # ---
+            (23, 23),  # ---
+            (25, 25),  # <!-- _class: centered -->
+            (29, 29),  # ---
+            (33, 33),  # ---
+            (35, 35),  # <!-- _class: nonesuch -->
+            (39, 39),  # ---
+            (45, 45),  # ---
+            (47, 48),  # <!-- class: title / _paginate: false -->
+        }
+
+    def test_rows_are_still_the_review_rows_verbatim(self, layout_blocks):
+        review = {row["id"]: row for row in source_row_specs(layout_blocks)}
+        for row in _rows(slide_specs(layout_blocks)):
+            assert row == review[row["id"]]
+
+    def test_a_code_sample_of_a_directive_stays_on_the_slide(self):
+        """A deck that documents this very feature must keep its own example —
+        and must not pick up the layout it is only demonstrating."""
+        source = "text\n\n    <!-- _class: title -->\n\n# A\n"
+        slides = slide_specs(render_markdown_blocks(source))
+        assert [row["startLine"] for row in _rows(slides)] == [1, 3, 5]
+        assert slides[0]["layout"] == "default"
+
+    def test_a_slide_of_nothing_but_a_directive_is_not_a_slide(self):
+        """``_append_slide`` already refuses blank slides; a suppressed
+        directive must not resurrect one."""
+        source = "# A\n\n---\n\n<!-- _class: title -->\n\n---\n\n# B\n"
+        slides = slide_specs(render_markdown_blocks(source))
+        assert len(slides) == 2
+        assert [s["layout"] for s in slides] == ["default", "default"]
+
+    def test_suppression_does_not_change_review_mode(self, layout_blocks):
+        """Review mode shows every block, directives included — this is a
+        presentation-mode grouping decision, not a parse change."""
+        html = " ".join(row["html"] for row in source_row_specs(layout_blocks))
+        assert "_class: title" in html
+        assert "class: quote" in html

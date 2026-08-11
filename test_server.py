@@ -3047,3 +3047,131 @@ class TestPresentationRoundTwo:
             html = marp_client.get("/view?path=" + path).text
             assert 'class="source-line' in html
             assert 'id="present-toggle"' in html
+
+
+class TestPerSlideLayouts:
+    """Per-slide layouts via Marp `_class` directives (#462).
+
+    The whitelist and the scoping live in `view_specs` (covered by
+    `test_presentation.py`), because both the server render and the Pyodide
+    soft swap call it; a copy in `app.js` would work in one path and silently
+    not in the other.  What is left for this file is the two asset-level
+    seams: the class actually reaching the slide element, and the CSS for the
+    names the whitelist admits actually shipping.
+    """
+
+    @pytest.fixture
+    def marp_client(self, source_dir):
+        (Path(source_dir) / "deck.md").write_text(
+            "---\nmarp: true\n---\n\n<!-- _class: title -->\n\n# Slide one\n"
+        )
+        configure(source_dir, Path(source_dir) / "test_comments.db")
+        return TestClient(app)
+
+    @staticmethod
+    def _build_deck(client):
+        js = client.get("/static/app.js").text
+        js = re.sub(r"//.*$", "", js, flags=re.M)
+        start = js.index("function buildDeck(")
+        return js[start : js.index("\n    }", start)]
+
+    @staticmethod
+    def _layout_rules(client):
+        css = re.sub(r"/\*.*?\*/", "", client.get("/static/style.css").text, flags=re.S)
+        return [
+            (sel.strip(), body)
+            for sel, body in re.findall(r"([^{}]*)\{([^{}]*)\}", css)
+            if ".layout-" in sel
+        ]
+
+    def test_the_slide_element_carries_its_layout_class(self, marp_client):
+        """Without this the layout is computed, shipped over the bridge and
+        then dropped on the floor."""
+        deck = self._build_deck(marp_client)
+        assert 'section.className = "slide layout-" + slide.layout;' in deck
+
+    def test_the_layout_name_is_not_resolved_in_javascript(self, marp_client):
+        """Constraint: the whitelist and the fallback have ONE home.  A copy
+        here would run on the soft-swap path and silently not on the server
+        one.  So `slide.layout` is *read* exactly once — straight onto the
+        class — and never inspected.  The bare-token match skips
+        `.view-layout` and the `"slide layout-"` prefix, both hyphenated, so a
+        branch on the value has nowhere to hide."""
+        js = re.sub(r"//.*$", "", marp_client.get("/static/app.js").text, flags=re.M)
+        reads = re.findall(r"(?<![A-Za-z0-9_$-])layout(?![A-Za-z0-9_$-])", js)
+        assert len(reads) == 1, (
+            "the bundle mentions `layout` %d times, not once: the layout is "
+            "being inspected in JS rather than just applied" % len(reads)
+        )
+
+    def test_every_whitelisted_layout_ships_css(self, marp_client):
+        """A layout the parser accepts but the stylesheet has never heard of
+        renders identically to `default` — the directive would look honoured
+        and do nothing.  An empty rule body is the same bug wearing a
+        selector, so the declarations are counted too."""
+        rules = self._layout_rules(marp_client)
+        for layout in view_specs.PRESENTATION_LAYOUTS:
+            if layout == "default":  # the base .slide rules ARE the default
+                continue
+            styled = [
+                (sel, body)
+                for sel, body in rules
+                if ".slide.layout-%s" % layout in sel and body.strip()
+            ]
+            assert styled, "the `%s` layout styles nothing — found %s" % (
+                layout,
+                [sel for sel, _ in rules],
+            )
+
+    def test_no_css_layout_is_unreachable(self, marp_client):
+        """The other direction: a rule for a name the whitelist rejects is
+        dead CSS that can never be selected."""
+        named = set()
+        for sel, _body in self._layout_rules(marp_client):
+            named.update(re.findall(r"\.layout-([A-Za-z0-9_-]+)", sel))
+        assert named <= set(view_specs.PRESENTATION_LAYOUTS), (
+            "CSS styles layouts the whitelist rejects: %s"
+            % sorted(named - set(view_specs.PRESENTATION_LAYOUTS))
+        )
+
+    def test_no_layout_rule_depends_on_sibling_position(self, marp_client):
+        """`buildDeck` gives every row its **own** `div.slide-block`, so two
+        paragraphs on one slide are never siblings.  `p:last-of-type` matches
+        *every* paragraph there — a rule written to catch the last one silently
+        catches all of them, which is how the first cut of the `quote` layout
+        applied its attribution style to the whole slide.  Anything
+        position-dependent below `.slide` has to hang off `.slide-block`."""
+        assert 'blockEl.className = "slide-block";' in self._build_deck(
+            marp_client
+        ), "rows are no longer one-per-div; re-derive this rule before relaxing it"
+        for sel, _body in self._layout_rules(marp_client):
+            tail = sel[sel.rindex(".layout-") :]
+            assert not re.search(
+                r"(:(first|last|only|nth)-(of-type|child)|[+~])", tail
+            ) or ".slide-block" in tail, (
+                "`%s` selects by sibling position inside a slide block that "
+                "only ever holds one element" % sel
+            )
+
+    def test_a_directive_block_does_not_reach_the_slide(self, marp_client):
+        """End to end over the real route payload: the directive comment is
+        metadata, and with `html: False` it would otherwise render as visible
+        escaped text on the slide."""
+        import server
+
+        payload = server.build_view_payload("deck.md")
+        specs = view_specs.presentation_specs(
+            payload["blocks"], None, payload["source"]
+        )
+        assert [s["layout"] for s in specs["slides"]] == ["title"]
+        html = " ".join(
+            row["html"] for slide in specs["slides"] for row in slide["rows"]
+        )
+        assert "_class" not in html
+
+    def test_review_mode_still_shows_the_directive(self, marp_client):
+        """Presentation mode is a grouping layer; the review render of the same
+        file is unchanged, directive block included."""
+        html = marp_client.get("/view?path=deck.md").text
+        assert "_class: title" in html
+        assert 'class="source-line' in html
