@@ -206,7 +206,7 @@ def set_comment_block_id(
     conn: sqlite3.Connection,
     comment_id: int,
     block_id: str,
-    block_offset: int,
+    block_offset: int | None,
     block_context: str | None = None,
 ) -> None:
     """Backfill the block anchor of a pre-#465 row.
@@ -215,6 +215,11 @@ def set_comment_block_id(
     not an edit, so the line anchor and ``updated_at`` stay as the author left
     them.  ``block_offset`` is written with ``block_id`` because the pair is what
     places the comment: the id says which block, the offset says how far into it.
+    It is ``int | None`` rather than ``int`` because the backfill passes
+    ``normalized_offset()``, which is None for a block that normalizes to
+    nothing and so has no line to name.  That case still gets its ``block_id``:
+    the id is what places the comment, and NULL is stored rather than 0, which
+    is a real offset meaning "the block's first line".
 
     ``block_context`` (#467) is written with them for the same reason: an id
     resolved on a document that holds several identical blocks names the copy it

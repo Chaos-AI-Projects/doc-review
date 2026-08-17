@@ -2,6 +2,7 @@
 
 import sqlite3
 import tempfile
+import typing
 from pathlib import Path
 
 import pytest
@@ -286,6 +287,39 @@ class TestBlockId:
         assert (after["line_start"], after["line_end"]) == (10, 12)
         assert after["anchor_commit"] == "deadbeef"
         assert after["updated_at"] == c["updated_at"]
+
+    def test_backfill_stores_a_missing_offset_as_null(self, conn):
+        """A block that normalizes to nothing has no line to name.
+
+        ``normalized_offset()`` returns None for exactly that block, and the
+        server backfill hands its result straight to this function
+        (``_resolve_comment_blocks`` in server.py).  The row must still learn
+        its ``block_id`` — the id is what places the comment, the offset only
+        says how far in — so a missing offset is stored as NULL rather than
+        being coerced to 0, which would be a real offset meaning "first line".
+        """
+        c = _make_comment(conn)
+        set_comment_block_id(conn, c["id"], "0011223344556677-1", None)
+        after = get_comment(conn, c["id"])
+        assert after["block_id"] == "0011223344556677-1"
+        assert after["block_offset"] is None
+
+    def test_backfill_offset_annotation_admits_none(self):
+        """The signature has to admit the None its only caller can pass.
+
+        Storing NULL works whatever the annotation says — Python does not
+        enforce it — so this is the assertion that catches the mismatch a
+        reader or a type checker would trip over: ``create_comment`` already
+        declares ``block_offset: int | None``, and a caller trusting ``int``
+        here would guard against a value the backfill legitimately produces.
+        """
+        hints = typing.get_type_hints(set_comment_block_id)
+        assert set(typing.get_args(hints["block_offset"])) == {int, type(None)}, (
+            "set_comment_block_id declares block_offset as "
+            f"{hints['block_offset']!r}, but the backfill in server.py passes "
+            "normalized_offset(), which is None for a block that normalizes "
+            "to nothing"
+        )
 
     def test_migration_adds_block_id_to_existing_table(self):
         """A live comments.db predating #465 gains the column, keeps its rows."""
