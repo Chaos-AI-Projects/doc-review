@@ -1,5 +1,6 @@
 """Route-level tests for the doc-review FastAPI server."""
 
+import os
 import re
 import subprocess
 import tempfile
@@ -728,6 +729,99 @@ class TestGitPathspecs:
         assert _is_tracked_and_dirty(odd) is True, (
             "a tracked file with uncommitted changes is dirty whatever it is "
             "called; reading its name as a git option loses the tracked check"
+        )
+
+    def test_a_filename_that_is_not_utf8_does_not_crash_the_guards(self, tmp_path):
+        """git quotes the offending name back on stderr, in the bytes it got.
+
+        POSIX filenames are bytes, so a name like ``bad\\xff.md`` is legal on
+        disk and arrives as a surrogate-escaped str.  `ls-files --error-unmatch`
+        echoes it into stderr verbatim, and capturing that stream in text mode
+        raises `UnicodeDecodeError` while decoding output nobody reads — from
+        inside the guard, so it escapes as a 500 on a plain page view rather
+        than as the "no git evidence" answer the guard is supposed to give.
+
+        Both guards must return their falsy answer instead of raising.
+        """
+        from server import _git_head_if_clean, _is_tracked_and_dirty
+
+        odd = tmp_path / os.fsdecode(b"bad\xff.md")
+        odd.write_bytes(b"git will never decode my name\n")
+        _git(tmp_path, "init", "-q")
+        _git(tmp_path, "config", "user.email", "test@example.com")
+        _git(tmp_path, "config", "user.name", "Test")
+
+        assert _git_head_if_clean(odd) is None
+        assert _is_tracked_and_dirty(odd) is False
+
+
+class TestGitGuardsStayDistinct:
+    """`_is_tracked_and_dirty()` is not the negation of `_git_head_if_clean()`.
+
+    The two share their plumbing — the `ls-files --error-unmatch --` tracked
+    check, the `diff --quiet HEAD --` comparison, the timeout handling — which
+    makes collapsing one into the other look like a tidy simplification.  It is
+    not: they answer different questions, and the cases below are the ones where
+    the answers come apart.  Both would pass vacuously if the guards agreed
+    everywhere, so each asserts the *pair*.
+    """
+
+    def test_an_untracked_file_has_no_clean_head_and_is_not_dirty(self, tmp_path):
+        """No git behind the file at all — falsy from both, but not the same answer.
+
+        `_git_head_if_clean()` says None because there is no commit to anchor to.
+        `_is_tracked_and_dirty()` must say False, and the distinction is what the
+        backfill gate rides on: dirty means "a reverse-blame correction is still
+        owed to this line, do not freeze it into a block id", and an untracked
+        file is never owed one.  Answering True here would stall the backfill
+        forever on files git will never have an opinion about.
+        """
+        from server import _git_head_if_clean, _is_tracked_and_dirty
+
+        _git(tmp_path, "init", "-q")
+        _git(tmp_path, "config", "user.email", "test@example.com")
+        _git(tmp_path, "config", "user.name", "Test")
+        (tmp_path / "committed.md").write_text("committed\n")
+        _git(tmp_path, "add", "--", "committed.md")
+        _git(tmp_path, "commit", "-qm", "give the repo a HEAD")
+
+        stranger = tmp_path / "stranger.md"
+        stranger.write_text("git has never seen this\n")
+
+        assert _git_head_if_clean(stranger) is None, (
+            "an untracked file cannot report a clean HEAD"
+        )
+        assert _is_tracked_and_dirty(stranger) is False, (
+            "an untracked file is not dirty; it is outside git's opinion "
+            "entirely, and no blame migration will ever correct its lines"
+        )
+
+    def test_a_repo_with_no_commits_has_no_clean_head_and_nothing_dirty(
+        self, tmp_path
+    ):
+        """A tracked file in a repo with no HEAD: `diff HEAD` cannot even run.
+
+        `git diff --quiet HEAD -- f` exits non-zero here because HEAD does not
+        resolve, not because the file differs from anything.  Reading that exit
+        code as "dirty" is the mistake `_is_tracked_and_dirty()`'s extra
+        `rev-parse --verify HEAD` exists to prevent, so the pair is asserted
+        against a repo that has staged a file and never committed it.
+        """
+        from server import _git_head_if_clean, _is_tracked_and_dirty
+
+        _git(tmp_path, "init", "-q")
+        _git(tmp_path, "config", "user.email", "test@example.com")
+        _git(tmp_path, "config", "user.name", "Test")
+        staged = tmp_path / "staged.md"
+        staged.write_text("staged, never committed\n")
+        _git(tmp_path, "add", "--", "staged.md")
+
+        assert _git_head_if_clean(staged) is None, (
+            "there is no HEAD to be clean against"
+        )
+        assert _is_tracked_and_dirty(staged) is False, (
+            "a repo with no commits has nothing for the blame migration to "
+            "arrive from, so its files must not be held back as dirty"
         )
 
 

@@ -134,36 +134,71 @@ def _list_files(root: Path) -> list[str]:
 _BLAME_HEADER_RE = re.compile(r"^([0-9a-f]{40}) (\d+) (\d+)")
 
 
+def _git_run(target: Path, *args: str) -> subprocess.CompletedProcess | None:
+    """Run ``git -C <target's directory> <args>``; None when git could not run.
+
+    None means *no answer* — git is missing or hung — as opposed to a
+    CompletedProcess carrying git's own verdict in its return code.  Callers
+    must map that third state deliberately: the two guards below both fail
+    towards "no git evidence", but they spell that as different values.
+    """
+    try:
+        return subprocess.run(
+            ["git", "-C", str(target.parent), *args],
+            # `errors="replace"`: git echoes pathspecs back on stderr as the
+            # bytes it received, and POSIX filenames need not be UTF-8.  Strict
+            # decoding would raise out of a guard whose whole contract is to
+            # answer rather than throw — and over stderr, which no caller reads.
+            # The only stdout anyone reads is `rev-parse`'s hex SHA.
+            capture_output=True, text=True, errors="replace", timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+
+def _git_is_tracked(target: Path) -> bool:
+    """True when git knows about *target* (also False when git cannot answer)."""
+    # `--` ends option parsing: without it a name like `-x.md` is read as the
+    # `-x` (exclude) flag, the pathspec vanishes, and `--error-unmatch`
+    # succeeds for a file git has never seen.  A name git rejects as an unknown
+    # option, like `--foo.md`, fails the same check from the other direction.
+    proc = _git_run(target, "ls-files", "--error-unmatch", "--", target.name)
+    return proc is not None and proc.returncode == 0
+
+
+def _git_has_head(target: Path) -> bool:
+    """True when the repo containing *target* has at least one commit."""
+    proc = _git_run(target, "rev-parse", "--verify", "-q", "HEAD")
+    return proc is not None and proc.returncode == 0
+
+
+def _git_matches_head(target: Path) -> bool | None:
+    """True when *target* is identical to HEAD, False when it differs, None
+    when git gave no answer.
+
+    Only meaningful once HEAD exists: in a repo with no commits ``diff HEAD``
+    fails because HEAD does not resolve, not because the file changed, and this
+    reports a plain False.  A caller that must not read that as "changed" has to
+    gate on `_git_has_head()` itself — which is a difference in the *answer*
+    the two guards below want, not in the plumbing they share.
+    """
+    proc = _git_run(target, "diff", "--quiet", "HEAD", "--", target.name)
+    if proc is None:
+        return None
+    return proc.returncode == 0
+
+
 def _git_head_if_clean(target: Path) -> str | None:
     """Return HEAD of the repo containing *target* when the file is
     git-tracked and clean vs HEAD; otherwise None."""
-    d = str(target.parent)
-    name = target.name
-    try:
-        tracked = subprocess.run(
-            # `--` ends option parsing: without it a name like `-x.md` is read
-            # as the `-x` (exclude) flag, the pathspec vanishes, and
-            # `--error-unmatch` succeeds for a file git has never seen.
-            ["git", "-C", d, "ls-files", "--error-unmatch", "--", name],
-            capture_output=True, timeout=5,
-        )
-        if tracked.returncode != 0:
-            return None
-        clean = subprocess.run(
-            ["git", "-C", d, "diff", "--quiet", "HEAD", "--", name],
-            capture_output=True, timeout=5,
-        )
-        if clean.returncode != 0:
-            return None
-        head = subprocess.run(
-            ["git", "-C", d, "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if head.returncode != 0:
-            return None
-        return head.stdout.strip() or None
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    if not _git_is_tracked(target):
         return None
+    if _git_matches_head(target) is not True:
+        return None
+    head = _git_run(target, "rev-parse", "HEAD")
+    if head is None or head.returncode != 0:
+        return None
+    return head.stdout.strip() or None
 
 
 def _is_tracked_and_dirty(target: Path) -> bool:
@@ -175,34 +210,21 @@ def _is_tracked_and_dirty(target: Path) -> bool:
     reverse-blame migration) that is being skipped, so its stored line carries
     no evidence and must not be turned into a permanent block id.  A file with
     no git behind it has no such mechanism to wait for.
+
+    Shares its plumbing with `_git_head_if_clean()` but not its answer: only an
+    explicit "git says this differs from HEAD" counts as dirty, so a file git
+    does not track, and a repo with no commits — nothing for the blame
+    migration to arrive from — are both False rather than dirty by default.
     """
-    d = str(target.parent)
-    name = target.name
-    try:
-        tracked = subprocess.run(
-            # `--` ends option parsing: without it a name like `-x.md` is read
-            # as the `-x` (exclude) flag, the pathspec vanishes, and
-            # `--error-unmatch` succeeds for a file git has never seen.
-            ["git", "-C", d, "ls-files", "--error-unmatch", "--", name],
-            capture_output=True, timeout=5,
-        )
-        if tracked.returncode != 0:
-            return False
-        head = subprocess.run(
-            ["git", "-C", d, "rev-parse", "--verify", "-q", "HEAD"],
-            capture_output=True, timeout=5,
-        )
-        if head.returncode != 0:
-            # A repo with no commits: nothing to diff against, and nothing for
-            # the blame migration to arrive from later either.
-            return False
-        clean = subprocess.run(
-            ["git", "-C", d, "diff", "--quiet", "HEAD", "--", name],
-            capture_output=True, timeout=5,
-        )
-        return clean.returncode != 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    if not _git_is_tracked(target):
         return False
+    if not _git_has_head(target):
+        # A repo with no commits: nothing to diff against, and nothing for the
+        # blame migration to arrive from later either.  `_git_matches_head()`
+        # would answer False (diff fails on the unresolvable HEAD) and that
+        # False must not become "dirty".
+        return False
+    return _git_matches_head(target) is False
 
 
 def _blame_surviving_lines(
