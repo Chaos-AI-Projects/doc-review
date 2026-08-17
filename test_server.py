@@ -765,17 +765,29 @@ def _silence_git(monkeypatch, *, when, raising):
     passes whatever each individual caller decided to do with `None`.  The
     mappings here differ from one another, so they have to be pinned one at a
     time.
+
+    Returns a list that fills, as the calls arrive, with the git commands it
+    silences — so a test can check that it silenced any at all.  A *when*
+    matching nothing leaves git working perfectly and the test measuring the
+    ordinary answer under a name promising the unanswered one — green, and
+    exercising none of what it claims.  Most of the tests below cannot fall in:
+    each asserts a value that differs from git's un-silenced answer — usually
+    after recording that answer in an opening pre-check — so an inert harness
+    fails them.  The list is for the one case where the two coincide.
     """
     import server
 
     real_run = subprocess.run
+    silenced = []
 
     def fake_run(cmd, *args, **kwargs):
         if list(cmd[3:3 + len(when)]) == list(when):
+            silenced.append(list(cmd))
             raise raising
         return real_run(cmd, *args, **kwargs)
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
+    return silenced
 
 
 class TestGitGaveNoAnswer:
@@ -843,9 +855,7 @@ class TestGitGaveNoAnswer:
             raising=subprocess.TimeoutExpired(cmd="git diff", timeout=5),
         )
 
-        answer = _git_matches_head(target)
-        assert answer is None
-        assert answer is not False, "no answer must not read as 'they differ'"
+        assert _git_matches_head(target) is None
 
     def test_an_unanswered_diff_does_not_make_a_clean_file_dirty(
         self, monkeypatch, git_source_dir
@@ -857,18 +867,28 @@ class TestGitGaveNoAnswer:
         permanent id yet".  Only an explicit "git says this differs" earns that,
         which is why the mapping is `is False` and not `not ...`.  A timeout
         answers no, and no correction is owed for evidence that never existed.
+
+        Alone among its siblings this test cannot open by contrasting git's
+        un-silenced answer with the expected silenced one, because here they
+        are the same value: a clean tracked file is not dirty either way, and
+        `False` is the whole vocabulary this guard has for both.  That costs
+        the test its evidence that the harness ran at all, so it takes that
+        evidence from the harness directly instead — without the check below,
+        a `when=` matching no git call leaves this passing on a fully working
+        git, asserting nothing about the timeout in its name.
         """
         from server import _is_tracked_and_dirty
 
         target = Path(git_source_dir) / "doc.md"
 
-        _silence_git(
+        silenced = _silence_git(
             monkeypatch,
             when=("diff", "--quiet"),
             raising=subprocess.TimeoutExpired(cmd="git diff", timeout=5),
         )
 
         assert _is_tracked_and_dirty(target) is False
+        assert silenced, "harness silenced no git call; the `False` above is git's, not the timeout's"
 
     def test_a_missing_git_is_not_read_as_tracking_the_file(
         self, monkeypatch, git_source_dir
