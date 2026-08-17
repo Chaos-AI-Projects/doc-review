@@ -766,14 +766,26 @@ def _silence_git(monkeypatch, *, when, raising):
     mappings here differ from one another, so they have to be pinned one at a
     time.
 
-    Returns a list that fills, as the calls arrive, with the git commands it
-    silences — so a test can check that it silenced any at all.  A *when*
-    matching nothing leaves git working perfectly and the test measuring the
-    ordinary answer under a name promising the unanswered one — green, and
-    exercising none of what it claims.  Most of the tests below cannot fall in:
-    each asserts a value that differs from git's un-silenced answer — usually
-    after recording that answer in an opening pre-check — so an inert harness
-    fails them.  The list is for the one case where the two coincide.
+    Returns a list that fills, as the calls arrive, with the full argv of each
+    git command it silences — so a test can check *which* call it took away,
+    not merely that it took one.  A *when* that misses its target leaves that
+    call answering normally, and the test measuring the ordinary answer under a
+    name promising the unanswered one — green, and exercising none of what it
+    claims.
+
+    No test below can be fooled by a *wholly inert* `when=`: each asserts a
+    value that differs from git's un-silenced answer — usually after recording
+    that answer in an opening pre-check — so leaving git entirely alone fails
+    them.  A *misdirected* `when=`, pointed at some other real call, is a
+    narrower question and the answer depends on the guard.  The three tests
+    over a guard that issues one git call (`_git_is_tracked()`,
+    `_git_has_head()`, `_git_matches_head()`) are safe for the same reason:
+    misdirect them and the single call under test answers normally.  The two
+    over `_git_head_if_clean()` are not — it is a chain of three calls and
+    every link returns `None`, the value those tests assert, so silencing any
+    other link of it passes them.  `_is_tracked_and_dirty()` is such a chain
+    too, with `False` at every link, which is why the test below names the
+    command it expects rather than counting.
     """
     import server
 
@@ -872,10 +884,14 @@ class TestGitGaveNoAnswer:
         un-silenced answer with the expected silenced one, because here they
         are the same value: a clean tracked file is not dirty either way, and
         `False` is the whole vocabulary this guard has for both.  That costs
-        the test its evidence that the harness ran at all, so it takes that
+        the test its evidence that the diff went unanswered, so it takes that
         evidence from the harness directly instead — without the check below,
-        a `when=` matching no git call leaves this passing on a fully working
-        git, asserting nothing about the timeout in its name.
+        a `when=` that silences no git call, *or one that silences the wrong
+        one*, leaves this passing on a diff git answered normally, asserting
+        nothing about the timeout in its name.  Naming the command is what
+        separates those: `when=("ls-files",)` also fills `silenced`, but it
+        stops the guard at its opening tracked check, which returns False on
+        its own without the diff ever being reached.
         """
         from server import _is_tracked_and_dirty
 
@@ -888,7 +904,9 @@ class TestGitGaveNoAnswer:
         )
 
         assert _is_tracked_and_dirty(target) is False
-        assert silenced, "harness silenced no git call; the `False` above is git's, not the timeout's"
+        assert any(c[3:5] == ["diff", "--quiet"] for c in silenced), (
+            "harness did not silence `diff --quiet`; the `False` above is git's, not the timeout's"
+        )
 
     def test_a_missing_git_is_not_read_as_tracking_the_file(
         self, monkeypatch, git_source_dir
