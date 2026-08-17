@@ -7226,9 +7226,29 @@ class TestDuplicateBlockDisambiguation:
         which is a far more common edit than reordering identical blocks, and a
         regression against what master already guarantees.
 
-        The edit is to 'alpha's *immediate* predecessor, which is what makes the
-        test discriminate: rewording some other block leaves 'alpha's context
-        untouched, so it would pass even if the context were being consulted.
+        The edit is to 'alpha's *immediate* predecessor, which is the only
+        reword that moves 'alpha's context at all: rewording any other block
+        leaves the context untouched, so nothing here could depend on it.
+
+        What this test does **not** do is stand guard on its own over folding
+        the context into `block_id` (#494 item 2 — `b8d75fe`'s message claimed
+        it did).  Whether it notices depends on where the fold lands, because
+        ``_matching_block()`` takes the candidate key with
+        ``stored.rsplit("-", 1)[0]``.  Append the context *after* the occurrence
+        and the strip takes it straight back off, leaving ``digest-occurrence``
+        — a key that already includes the occurrence, so every block in the
+        document lands in a bucket of its own and matching collapses to the
+        pre-#467 exact-id equality.  'alpha's occurrence did not move here, so
+        it is found, and this test passes with the regression installed.  The
+        collapse is not harmless, just invisible *here*: it is why that variant
+        still fails the duplicate-disambiguation tests, where a copy inserted
+        above renumbers the copies and the comment is placed on the wrong one.
+        Splice the context in *before* the occurrence instead and the key
+        carries it, so this test does detach and fail.  The property holds
+        either way through ``test_context_does_not_change_a_block_id`` and
+        ``test_block_id_stable_across_unrelated_edit_above`` in
+        ``test_renderer.py``, which assert the id itself rather than a placement
+        derived from it, and so cannot be dodged by splice position.
         """
         from server import build_view_payload
 
