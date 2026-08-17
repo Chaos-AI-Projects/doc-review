@@ -64,9 +64,16 @@ def cmd_list(args: argparse.Namespace) -> None:
             loc = f"L{c['line_start']}"
             if c["line_end"] != c["line_start"]:
                 loc += f"-{c['line_end']}"
+            # Beside the location, because that is what it qualifies: the
+            # server could not place this comment against the file as it is
+            # now, so the line above is a stale guess (#468).  Without the
+            # tag an adrift comment reads exactly like a placed one here,
+            # while --json has carried the flag since #495 — and this is the
+            # surface agents read through.
+            detached = " [DETACHED]" if c.get("detached") else ""
             resolved = " [RESOLVED]" if c.get("resolved") else ""
             reply = " (reply)" if c.get("parent_id") else ""
-            print(f"#{c['id']} {c['author']} {loc}{resolved}{reply}  "
+            print(f"#{c['id']} {c['author']} {loc}{detached}{resolved}{reply}  "
                   f"{c['created_at'][:16]}")
             for line in c["body"].split("\n"):
                 print(f"  {line}")

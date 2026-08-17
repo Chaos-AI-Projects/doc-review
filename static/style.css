@@ -366,7 +366,24 @@ main { padding: 1rem; }
 
 .reply-thread { margin-left: 1rem; border-left: 2px solid var(--border); padding-left: .5rem; }
 
-.comment-card.reply { border-left: 3px solid var(--accent); }
+/* A reply sits under the root it answers (#465 Phase 2): indented, so the
+   thread reads as a thread, and accented so it is still legible when the
+   sidebar is narrow enough that 1rem is easy to miss. */
+.comment-card.reply { border-left: 3px solid var(--accent); margin-left: 1rem; }
+
+.detached-badge {
+    display: inline-block;
+    background: #fef3c7;
+    color: #92400e;
+    padding: .1rem .35rem;
+    border-radius: 3px;
+    font-size: .7rem;
+    font-weight: 600;
+}
+
+.comment-card.detached {
+    border-left: 3px solid #f59e0b;
+}
 
 .reply-badge {
     display: inline-block;

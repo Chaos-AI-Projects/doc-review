@@ -14,6 +14,7 @@ from db import (
     init_db,
     list_comments,
     resolve_comment,
+    set_comment_block_id,
     unresolve_comment,
 )
 
@@ -246,3 +247,168 @@ class TestGetConnection:
             init_db(conn)
             conn.close()
             assert db_path.exists()
+
+
+class TestBlockId:
+    """Content-derived block anchoring (#465, Phase 1)."""
+
+    def test_block_id_column_exists(self, conn):
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(comments)")}
+        assert "block_id" in cols
+
+    def test_block_id_index_exists(self, conn):
+        names = {row[1] for row in conn.execute("PRAGMA index_list(comments)")}
+        assert "idx_comments_block_id" in names
+
+    def test_create_comment_persists_block_id(self, conn):
+        c = _make_comment(conn, block_id="abcdef0123456789-1")
+        assert c["block_id"] == "abcdef0123456789-1"
+        assert get_comment(conn, c["id"])["block_id"] == "abcdef0123456789-1"
+
+    def test_block_id_defaults_to_null(self, conn):
+        assert _make_comment(conn)["block_id"] is None
+
+    def test_set_comment_block_id_backfills(self, conn):
+        c = _make_comment(conn)
+        set_comment_block_id(conn, c["id"], "0011223344556677-1", 9)
+        after = get_comment(conn, c["id"])
+        assert after["block_id"] == "0011223344556677-1"
+        assert after["block_offset"] == 9, (
+            "the id without the offset it was resolved at cannot place a comment "
+            "inside its block"
+        )
+
+    def test_set_comment_block_id_leaves_anchor_untouched(self, conn):
+        """Backfill is bookkeeping: it must not move the comment or its anchor."""
+        c = _make_comment(conn, line_start=10, line_end=12, anchor_commit="deadbeef")
+        set_comment_block_id(conn, c["id"], "0011223344556677-1", 9)
+        after = get_comment(conn, c["id"])
+        assert (after["line_start"], after["line_end"]) == (10, 12)
+        assert after["anchor_commit"] == "deadbeef"
+        assert after["updated_at"] == c["updated_at"]
+
+    def test_migration_adds_block_id_to_existing_table(self):
+        """A live comments.db predating #465 gains the column, keeps its rows."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "legacy.db"
+            legacy = sqlite3.connect(str(db_path))
+            legacy.execute("""
+                CREATE TABLE comments (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id     TEXT    NOT NULL,
+                    line_start  INTEGER NOT NULL,
+                    line_end    INTEGER NOT NULL,
+                    author      TEXT    NOT NULL,
+                    body        TEXT    NOT NULL,
+                    parent_id   INTEGER,
+                    resolved    INTEGER NOT NULL DEFAULT 0,
+                    created_at  TEXT    NOT NULL,
+                    updated_at  TEXT    NOT NULL,
+                    file_path   TEXT,
+                    anchor_commit TEXT,
+                    FOREIGN KEY (parent_id) REFERENCES comments(id)
+                )
+            """)
+            legacy.execute("""
+                INSERT INTO comments (file_id, line_start, line_end, author, body,
+                                      parent_id, resolved, created_at, updated_at,
+                                      file_path, anchor_commit)
+                VALUES ('old_blob', 3, 3, 'alice', 'keep me', NULL, 0,
+                        '2026-01-01T00:00:00', '2026-01-01T00:00:00',
+                        'doc.md', NULL)
+            """)
+            legacy.commit()
+            legacy.close()
+
+            conn = get_connection(db_path)
+            init_db(conn)
+
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(comments)")}
+            assert "block_id" in cols
+            assert "block_offset" in cols
+            row = conn.execute(
+                "SELECT body, block_id, block_offset FROM comments WHERE id=1"
+            ).fetchone()
+            assert row[0] == "keep me"
+            assert row[1] is None
+            assert row[2] is None
+            conn.close()
+
+
+class TestBlockContext:
+    """The additive anchor that tells identical blocks apart (#467)."""
+
+    def test_block_context_column_exists(self, conn):
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(comments)")}
+        assert "block_context" in cols
+
+    def test_create_comment_persists_block_context(self, conn):
+        c = _make_comment(
+            conn, block_id="abcdef0123456789-1", block_context="76543210fedcba98"
+        )
+        assert c["block_context"] == "76543210fedcba98"
+        assert get_comment(conn, c["id"])["block_context"] == "76543210fedcba98"
+
+    def test_block_context_defaults_to_null(self, conn):
+        """Legacy rows have none, and must keep resolving by occurrence."""
+        assert _make_comment(conn)["block_context"] is None
+
+    def test_backfill_writes_the_context_with_the_id(self, conn):
+        c = _make_comment(conn)
+        set_comment_block_id(
+            conn, c["id"], "0011223344556677-1", 9, block_context="aabbccddeeff0011"
+        )
+        after = get_comment(conn, c["id"])
+        assert after["block_id"] == "0011223344556677-1"
+        assert after["block_context"] == "aabbccddeeff0011"
+
+    def test_migration_adds_block_context_to_existing_table(self):
+        """A live comments.db predating #467 gains the column, keeps its rows."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "legacy.db"
+            legacy = sqlite3.connect(str(db_path))
+            legacy.execute("""
+                CREATE TABLE comments (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id     TEXT    NOT NULL,
+                    line_start  INTEGER NOT NULL,
+                    line_end    INTEGER NOT NULL,
+                    author      TEXT    NOT NULL,
+                    body        TEXT    NOT NULL,
+                    parent_id   INTEGER,
+                    resolved    INTEGER NOT NULL DEFAULT 0,
+                    created_at  TEXT    NOT NULL,
+                    updated_at  TEXT    NOT NULL,
+                    file_path   TEXT,
+                    anchor_commit TEXT,
+                    block_id    TEXT,
+                    block_offset INTEGER,
+                    FOREIGN KEY (parent_id) REFERENCES comments(id)
+                )
+            """)
+            legacy.execute("""
+                INSERT INTO comments (file_id, line_start, line_end, author, body,
+                                      parent_id, resolved, created_at, updated_at,
+                                      file_path, anchor_commit, block_id, block_offset)
+                VALUES ('old_blob', 3, 3, 'alice', 'keep me', NULL, 0,
+                        '2026-01-01T00:00:00', '2026-01-01T00:00:00',
+                        'doc.md', NULL, 'abcdef0123456789-1', 0)
+            """)
+            legacy.commit()
+            legacy.close()
+
+            conn = get_connection(db_path)
+            init_db(conn)
+            init_db(conn)  # idempotent: a second open must not fail or rewrite
+
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(comments)")}
+            assert "block_context" in cols
+            row = conn.execute(
+                "SELECT body, block_id, block_offset, block_context "
+                "FROM comments WHERE id=1"
+            ).fetchone()
+            assert (row[0], row[1], row[2]) == ("keep me", "abcdef0123456789-1", 0)
+            assert row[3] is None, (
+                "a pre-#467 row keeps resolving by occurrence rather than being "
+                "given a context it was never written with"
+            )

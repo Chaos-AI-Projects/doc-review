@@ -76,7 +76,10 @@
         <input type="hidden" name="path" value="{{ header.formPath }}">
         <input type="hidden" name="line_start" value="">
         <input type="hidden" name="line_end" value="">
-        <input type="hidden" name="parent_id" value="0">
+        {# No parent_id field: the server threads a new comment onto whatever
+           its block already carries (#465 Phase 2).  This was a hardcoded
+           value="0", which is why no comment posted from the web UI was ever
+           a reply. #}
         <label>Comment
             <textarea name="body" required rows="3" placeholder="Write a comment…"></textarea>
         </label>

@@ -151,11 +151,24 @@
 
     function commentCardHtml(c) {
         var cls = "comment-card" + (c.resolved ? " resolved" : "");
-        if (c.parent_id) cls += " reply";
+        // Indent by the depth the server resolved, not by parent_id (#465
+        // Phase 2): a reply whose root is not in *this block's* list — a
+        // parent on another file, a root that detached to another block —
+        // comes back at depth 0, because indenting it under nothing would
+        // claim a thread that is not on screen.  The badge below still says
+        // it is a reply.
+        if (c.depth) cls += " reply";
+        if (c.detached) cls += " detached";
         var html = '<div class="' + cls + '">';
         html += '<div class="comment-meta">';
         if (c.parent_id) {
             html += '<span class="reply-badge">reply</span> ';
+        }
+        if (c.detached) {
+            // The block this was written about is gone (#465): say so rather
+            // than let it read as a comment on whatever text it landed next to.
+            html += '<span class="detached-badge" title="The text this comment' +
+                ' was written about has changed or been removed">detached</span> ';
         }
         html +=
             "<strong>" +

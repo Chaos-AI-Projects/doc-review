@@ -20,6 +20,7 @@ cd doc-review && pytest -v
 - **Server:** FastAPI, server-rendered HTML (Jinja2), minimal vanilla JS
 - **Storage:** SQLite (`comments.db`) for block-anchored comments
 - **File identity:** git blob object id for git-tracked files; path+content SHA-256 fallback
+- **Comment anchoring:** every block carries a content-derived `block_id` (`sha256` of its normalized source plus an occurrence index), stored with the comment. On every read — the web view and `GET /api/comments` alike, and so `comments_cli.py` — a comment is placed by `block_id` first, then by the `anchor_commit` reverse-blame migration, then by its stored line numbers — so a comment follows its text even on a dirty tree or a non-git root. A comment whose block is gone is still shown, flagged *detached*, never silently reattached to unrelated text
 - **Rendering:** Markdown source parsed by markdown-it-py into blocks, rendered to HTML with per-block anchors and TOC
 - **Presentation mode:** Marp-shaped markdown (`---` slide breaks + front-matter directives) presented as slides — a client-side grouping of the *same* blocks review mode renders, so comments keep their anchors across a mode flip. Offered only for a document whose front matter declares `marp: true`. Opens full screen where the browser allows it, falling back to a fixed overlay otherwise. Read-only; `Esc` or the on-screen exit control returns to review, arrow keys or the on-screen arrows move between slides
 - **Responsive:** Desktop = sidebar; mobile = inline expandable panels
