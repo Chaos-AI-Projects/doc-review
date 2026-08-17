@@ -246,7 +246,15 @@ def _blame_surviving_lines(
                 "-L", f"{line_start},{line_end}",
                 "--", target.name,
             ],
-            capture_output=True, text=True, timeout=10,
+            # `errors="replace"` for the same reason `_git_run()` carries it,
+            # but reached through a wider door: porcelain blame prints the
+            # file's *own content*, so any tracked file holding a byte that is
+            # not UTF-8 breaks this — no odd filename required.  Strict
+            # decoding raises inside `subprocess.run`, past the `except` below,
+            # out of a function whose contract is to answer None.
+            # This keeps its own `subprocess.run` rather than joining
+            # `_git_run()`: the 10s timeout is not `_git_run()`'s hardcoded 5s.
+            capture_output=True, text=True, errors="replace", timeout=10,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None
@@ -1189,7 +1197,13 @@ async def api_blame(path: str = Query(...)):
     try:
         result = subprocess.run(
             ["git", "-C", d, "blame", "--porcelain", "--", name],
-            capture_output=True, text=True, timeout=15,
+            # `errors="replace"`: porcelain blame echoes the file's content, so
+            # one non-UTF-8 byte in a tracked file would raise here and reach
+            # the client as a 500 — not one of the failures this route maps
+            # below (502 for no answer, 404 for git's refusal).  Matches how
+            # every other reader of the source decodes it.  Own `subprocess.run`
+            # rather than `_git_run()`: 15s timeout, not its 5s.
+            capture_output=True, text=True, errors="replace", timeout=15,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         raise HTTPException(status_code=502, detail="git blame unavailable")

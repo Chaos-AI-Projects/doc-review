@@ -825,6 +825,91 @@ class TestGitGuardsStayDistinct:
         )
 
 
+class TestBlameSurvivesNonUtf8Content:
+    """The two git calls that do not go through `_git_run()` decode blame output.
+
+    `_blame_surviving_lines()` and the `/api/blame` route run git themselves —
+    they carry 10s and 15s timeouts against `_git_run()`'s hardcoded 5s, so they
+    were left out of the shared runner rather than folded into it.  That also
+    left them out of its `errors="replace"`.
+
+    Unlike the guards, these do not merely echo a pathspec back: `blame
+    --porcelain` prints **the file's own content**, so an ordinary ASCII
+    filename is enough to break them.  One stray byte anywhere in a tracked
+    `.md` — a latin-1 dash pasted from a mail client, a truncated multi-byte
+    sequence — and strict decoding raises inside `subprocess.run`, before either
+    caller can apply its own error handling.
+
+    That byte is otherwise harmless: every other reader on the view path takes
+    the source with `errors="replace"`, so the page renders it as U+FFFD and
+    carries on.  These two are the last strict decoders left, which is what
+    turns a cosmetic byte into a 500.
+    """
+
+    BAD_DOC = b"# Title\n\npara one\n\npara two\n\nsigned \xff Ren\xe9\n"
+
+    def _repo(self, tmp_path: Path) -> tuple[Path, str, str]:
+        """A repo whose `doc.md` holds a non-UTF-8 byte, with two commits."""
+        (tmp_path / "doc.md").write_bytes(self.BAD_DOC)
+        _git(tmp_path, "init", "-q")
+        _git(tmp_path, "config", "user.email", "test@example.com")
+        _git(tmp_path, "config", "user.name", "Test")
+        _git(tmp_path, "add", "--", "doc.md")
+        _git(tmp_path, "commit", "-qm", "initial doc")
+        anchor = _git(tmp_path, "rev-parse", "HEAD")
+
+        (tmp_path / "doc.md").write_bytes(b"preamble\n\n" + self.BAD_DOC)
+        _git(tmp_path, "add", "--", "doc.md")
+        _git(tmp_path, "commit", "-qm", "insert a preamble")
+        head = _git(tmp_path, "rev-parse", "HEAD")
+        return tmp_path / "doc.md", anchor, head
+
+    def test_reverse_blame_answers_instead_of_raising(self, tmp_path):
+        """`_blame_surviving_lines()` must report the move, not die reading it.
+
+        Its docstring promises the surviving line numbers, or None when blame
+        failed — a caller relying on that None leaves the stored anchor alone.
+        A `UnicodeDecodeError` is neither: it escapes the function entirely and
+        takes the whole page render with it, on the backfill path, for a comment
+        the file itself displays fine.
+
+        Asserting the migrated numbers rather than "did not raise" keeps the
+        test honest: swallowing the decode into a blanket None would satisfy the
+        weaker claim while silently freezing every anchor in the file.
+        """
+        from server import _blame_surviving_lines
+
+        doc, anchor, head = self._repo(tmp_path)
+
+        # Lines 5..7 at the anchor are 'para two', '', 'signed \xff René'; the
+        # preamble pushes them to 7..9.  The range has to cover the bad byte —
+        # `-L` bounds which lines blame prints, so a byte outside it is never
+        # decoded and the test would pass against the unfixed code.
+        assert _blame_surviving_lines(doc, anchor, head, 5, 7) == [7, 8, 9]
+
+    def test_the_blame_route_answers_instead_of_returning_500(self, tmp_path):
+        """`GET /api/blame` on such a file must serve the blame, not fail.
+
+        The route already maps every way git can disappoint it — 502 on a
+        timeout or a missing binary, 404 on a non-zero exit.  A decode error is
+        none of those and reaches the client as an unhandled 500, on a file git
+        blamed perfectly well.
+        """
+        self._repo(tmp_path)
+        configure(str(tmp_path), tmp_path / "test_comments.db")
+        resp = TestClient(app).get("/api/blame?path=doc.md")
+
+        assert resp.status_code == 200, resp.text
+        signed = [
+            line for line in resp.json()["lines"]
+            if line["content"].startswith("signed ")
+        ]
+        assert signed and "\ufffd" in signed[0]["content"], (
+            "the undecodable byte must come back replaced, the way every other "
+            "reader on the view path already renders it"
+        )
+
+
 class TestAnchorCommitOnCreate:
     """POST /comment records the anchor commit for clean git-tracked files (#406)."""
 
