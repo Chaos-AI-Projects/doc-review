@@ -755,6 +755,195 @@ class TestGitPathspecs:
         assert _is_tracked_and_dirty(odd) is False
 
 
+def _silence_git(monkeypatch, *, when, raising):
+    """Make exactly the git calls matching *when* fail, leaving the rest real.
+
+    *when* is matched against the git arguments (everything after ``git -C
+    <dir>``), so a test can take away a single one of the three commands the
+    guards issue.  That is the point: a blanket "git is broken" stub makes
+    every guard fall to the same branch at once, and a test written over it
+    passes whatever each individual caller decided to do with `None`.  The
+    mappings here differ from one another, so they have to be pinned one at a
+    time.
+    """
+    import server
+
+    real_run = subprocess.run
+
+    def fake_run(cmd, *args, **kwargs):
+        if list(cmd[3:3 + len(when)]) == list(when):
+            raise raising
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(server.subprocess, "run", fake_run)
+
+
+class TestGitGaveNoAnswer:
+    """`_git_run()` returns `None` when git could not run at all (#531).
+
+    Not "git said no" — *no answer*: the binary is missing, or the call hit the
+    5s timeout.  Every caller maps that third state by hand, and the mappings
+    are deliberately not the same, so each one needs its own test.  The failure
+    they guard against is quiet: nothing raises, and a wrong mapping reads as a
+    perfectly ordinary answer from a repo that never spoke.
+    """
+
+    def test_a_diff_that_times_out_does_not_produce_a_head_anchor(
+        self, monkeypatch, git_source_dir
+    ):
+        """The one that fabricates evidence rather than losing it.
+
+        `_git_head_if_clean()` returns a commit SHA meaning "this file is
+        identical to HEAD".  It learns that *only* from `diff --quiet`, so when
+        the diff times out the file's cleanliness is simply unknown — the repo
+        still has a HEAD, and `rev-parse` will hand one over quite happily.
+        Letting the unanswered diff through the `is not True` gate would stamp
+        a real SHA onto a file that may differ from it in every line, and the
+        anchor outlives the timeout that produced it.
+
+        `ls-files` and `rev-parse` are left working precisely so the test fails
+        for the diff and nothing else: the SHA is available throughout, and the
+        only thing missing is the permission to use it.
+        """
+        from server import _git_head_if_clean
+
+        target = Path(git_source_dir) / "doc.md"
+        assert _git_head_if_clean(target) is not None, "clean file, anchor expected"
+
+        _silence_git(
+            monkeypatch,
+            when=("diff", "--quiet"),
+            raising=subprocess.TimeoutExpired(cmd="git diff", timeout=5),
+        )
+
+        assert _git_head_if_clean(target) is None
+
+    def test_an_unanswered_diff_is_not_reported_as_a_difference(
+        self, monkeypatch, git_source_dir
+    ):
+        """`_git_matches_head()` has three answers, and `None` is not `False`.
+
+        `False` is a claim git made — "I compared them, they differ".  `None`
+        is the absence of one.  Collapsing the two is the tempting mapping (it
+        keeps the return type a plain bool) and it is wrong in both directions:
+        `_git_head_if_clean()` reads False and None alike as "no anchor", but
+        `_is_tracked_and_dirty()` tests `is False` specifically, so a timeout
+        arriving as False would make an unanswered file *dirty* on the backfill
+        path.  Asserting `is None` rather than a falsy check is what keeps the
+        two distinguishable.
+        """
+        from server import _git_matches_head
+
+        target = Path(git_source_dir) / "doc.md"
+        assert _git_matches_head(target) is True, "clean file, should match HEAD"
+
+        _silence_git(
+            monkeypatch,
+            when=("diff", "--quiet"),
+            raising=subprocess.TimeoutExpired(cmd="git diff", timeout=5),
+        )
+
+        answer = _git_matches_head(target)
+        assert answer is None
+        assert answer is not False, "no answer must not read as 'they differ'"
+
+    def test_an_unanswered_diff_does_not_make_a_clean_file_dirty(
+        self, monkeypatch, git_source_dir
+    ):
+        """The other side of the same `None`, at the other caller.
+
+        `_is_tracked_and_dirty()` gates the block-id backfill: dirty means "a
+        reverse-blame correction is still owed, do not freeze this line into a
+        permanent id yet".  Only an explicit "git says this differs" earns that,
+        which is why the mapping is `is False` and not `not ...`.  A timeout
+        answers no, and no correction is owed for evidence that never existed.
+        """
+        from server import _is_tracked_and_dirty
+
+        target = Path(git_source_dir) / "doc.md"
+
+        _silence_git(
+            monkeypatch,
+            when=("diff", "--quiet"),
+            raising=subprocess.TimeoutExpired(cmd="git diff", timeout=5),
+        )
+
+        assert _is_tracked_and_dirty(target) is False
+
+    def test_a_missing_git_is_not_read_as_tracking_the_file(
+        self, monkeypatch, git_source_dir
+    ):
+        """No git binary at all — `FileNotFoundError`, the other `None` source.
+
+        `_git_is_tracked()` guards `--error-unmatch`, whose *success* means
+        tracked.  `proc is not None and ...` is load-bearing rather than
+        defensive typing: drop it and the expression cannot even be evaluated,
+        but weaken it to `proc is None or ...` — the shape a "be lenient when
+        git is unavailable" instinct produces — and a machine without git
+        reports every file as tracked, including files it has never seen.
+        """
+        from server import _git_is_tracked
+
+        target = Path(git_source_dir) / "doc.md"
+        assert _git_is_tracked(target) is True, "committed file, should be tracked"
+
+        _silence_git(
+            monkeypatch,
+            when=("ls-files",),
+            raising=FileNotFoundError(2, "No such file or directory: 'git'"),
+        )
+
+        assert _git_is_tracked(target) is False
+
+    def test_a_missing_git_is_not_read_as_the_repo_having_commits(
+        self, monkeypatch, git_source_dir
+    ):
+        """Same mapping, and it must stay a *separate* test from the one above.
+
+        `_git_has_head()` exists to tell an empty repo from a real one, because
+        `diff HEAD` fails in an empty repo for a reason that has nothing to do
+        with the file.  Both guards read "cannot answer" as False, but they are
+        two independent expressions and a mutation to either survives a test
+        that only exercises the other.
+        """
+        from server import _git_has_head
+
+        target = Path(git_source_dir) / "doc.md"
+        assert _git_has_head(target) is True, "repo has a commit"
+
+        _silence_git(
+            monkeypatch,
+            when=("rev-parse", "--verify"),
+            raising=FileNotFoundError(2, "No such file or directory: 'git'"),
+        )
+
+        assert _git_has_head(target) is False
+
+    def test_an_unanswered_rev_parse_does_not_anchor_to_an_empty_sha(
+        self, monkeypatch, git_source_dir
+    ):
+        """The last `None` in the chain, after both gates have already passed.
+
+        By this point the file is tracked and confirmed clean, so the anchor is
+        genuinely owed — only the SHA is missing.  That makes returning
+        something the tempting mistake: `head.stdout` cannot be reached through
+        a `None`, but a caller that mapped this to `""` would write an empty
+        anchor that later reads as a commit.  The trailing `or None` shows the
+        empty string is already understood to be a non-answer here.
+        """
+        from server import _git_head_if_clean
+
+        target = Path(git_source_dir) / "doc.md"
+
+        _silence_git(
+            monkeypatch,
+            when=("rev-parse", "HEAD"),
+            raising=subprocess.TimeoutExpired(cmd="git rev-parse", timeout=5),
+        )
+
+        assert _git_head_if_clean(target) is None
+
+
 class TestGitGuardsStayDistinct:
     """`_is_tracked_and_dirty()` is not the negation of `_git_head_if_clean()`.
 
