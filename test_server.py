@@ -4695,12 +4695,13 @@ class TestCrossBlockOrCrossFileExplicitParent:
         rule out a silent 201 -- a 201 body carries no ``detail``, so the
         assertion cannot pass on one -- but it accepts *any* 422 that names the
         id, and the not-found guard names it too.  Measured: dropping the parent
-        row after the fixture creates it leaves this test green on
-        ``parent_id N does not name an existing comment``, so a fixture that
+        row after the create call below stores it leaves this test green on
+        ``parent_id N does not name an existing comment``, so a regression that
         stopped storing the parent would keep the test passing while the block
-        rule it is named for was never consulted.  ``another block`` is the
-        block guard's message and no other guard's, so it is what tells them
-        apart.
+        rule it is named for was never consulted.  (``anchored`` builds the
+        document, the database and the client and no comments; the parent is
+        this test's own create.)  ``another block`` is the block guard's message
+        and no other guard's, so it is what tells them apart.
 
         Only that phrase is pinned, not the order of the guards (#503 item 2,
         still open): the parent here is created on this same file through the
@@ -4708,12 +4709,14 @@ class TestCrossBlockOrCrossFileExplicitParent:
 
         The status assertion earns its place in one direction only, and it is
         not the obvious one.  It does *not* catch a silent 201: a 201 body
-        carries no ``detail``, so the phrase assertion already fails on one.
-        What it catches is the same message under a different code -- mutating
-        the block guard to answer 409 leaves ``another block`` in ``detail``, so
-        the phrase assertion passes and only this one fails.  Beyond that it is
-        the better diagnostic, failing first and printing what came back rather
-        than leaving a reader to infer the status from an absent ``detail``.
+        carries no ``detail``, so both message assertions below already fail on
+        one -- and with this assertion removed it is the *id* one that fires,
+        being ordered first.  What it catches is the same message under a
+        different code -- mutating the block guard to answer 409 leaves
+        ``another block`` in ``detail``, so both message assertions pass and
+        only this one fails.  Beyond that it is the better diagnostic, failing
+        first and printing what came back rather than leaving a reader to infer
+        the status from an absent ``detail``.
         """
         elsewhere = _post_json_comment(
             anchored["client"], line_start=3, body="on the first paragraph"
