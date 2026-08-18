@@ -6976,7 +6976,19 @@ class TestOutOfRangeCommentIdOnResolve:
     of #475** (owner decision, 2026-08-17: "so caller will know").  It used to
     redirect 303 -- success reported for an update that did not happen -- which
     the web UI cannot reach, because its buttons are rendered from real rows,
-    but the CLI and any script posting to these routes can.
+    but any script posting to these routes can.
+
+    Precedence, recorded here rather than in a test of its own: the range check
+    must run *before* the lookup, because the lookup is what raises
+    ``OverflowError`` on an unbindable id.  No single test pins that ordering
+    *alone*, and one claiming to would be misleading -- hoisting the lookup
+    ahead of ``_reject_unusable_comment_id()`` turns every 422 in this class
+    into a 500, so every test below that asserts one goes red together (five,
+    as measured).  Each of those five would catch the hoist by itself; what
+    none of them does is catch it *distinctively*, so naming any one as the
+    test for the ordering would credit it with coverage its four neighbours
+    supply equally.  Hence the invariant is recorded against the class rather
+    than in an assertion of its own.
 
     The two refusals answer differently on purpose, and the difference is
     load-bearing rather than decorative:
@@ -7085,9 +7097,21 @@ class TestOutOfRangeCommentIdOnResolve:
         from both sides, so neither widening nor narrowing it by one survives.
 
         It names no row, so since item 2 the answer is 404 rather than the old
-        303 -- but what this test is about is that it is **not 422**.  Widening
-        the range check to ``<= 2**63`` swaps 404 for 422 here and nowhere else,
-        so this is the assertion that sees it.
+        303 -- but what this test is about is that it is **not 422**.
+        *Narrowing* the range check to ``< 2**63 - 1`` swaps 404 for 422 here,
+        and this is the only route test that sees it;
+        ``TestSqliteIntegerBound::test_the_largest_legal_integer_fits``
+        catches the same mutant one layer down, on the predicate.
+
+        Note the direction.  Widening -- to ``<= 2**63`` -- cannot fail this
+        test: a wider range still admits ``2**63-1``, so the answer stays 404.
+        That direction is pinned by the three tests that assert a *rejection*
+        (``test_the_boundary_value_itself_is_rejected`` here and in
+        ``TestOutOfRangeExplicitParent``, plus
+        ``TestSqliteIntegerBound::test_one_past_the_top_does_not_fit``).  Each
+        side of the bound is pinned by the tests that would start answering
+        differently if it moved that way, which is why both this test and its
+        boundary companion have to exist.
         """
         resp = self._resolve(anchored["client"], 2**63 - 1)
         assert resp.status_code == 404, (
@@ -7153,19 +7177,6 @@ class TestOutOfRangeCommentIdOnResolve:
         assert resp.status_code == 404, (
             "-5 is a bindable id that names no comment, so it is the "
             f"not-found case, not the unusable-id case (422); got {resp.status_code}"
-        )
-
-    def test_an_out_of_range_id_keeps_its_own_answer(self, anchored):
-        """Precedence: the range check runs before the lookup, and says so.
-
-        Both refusals are now 4xx, so a single ``get_comment() is None`` guard
-        placed *ahead* of the range check would leave the suite green on every
-        rejection test in this class except this one -- and it would be a
-        regression, because the lookup is what raises ``OverflowError``.
-        """
-        assert self._resolve(anchored["client"], 10**19).status_code == 422, (
-            "an id too wide to bind must still be refused as unusable before "
-            "it reaches the lookup, not reported as merely not found"
         )
 
     def test_an_unknown_id_leaves_the_other_comments_alone(self, anchored):

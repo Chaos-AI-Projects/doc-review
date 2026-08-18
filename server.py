@@ -423,9 +423,10 @@ def _reject_unknown_comment(comment_id: int, row: dict | None) -> None:
     told: "No, so caller will know."
 
     The web UI cannot reach this.  Its Resolve/Unresolve buttons are rendered
-    from rows the server just read, so the id always exists.  The CLI and any
-    script posting to these routes can, and they are the callers with no human
-    watching the page to notice nothing changed.
+    from rows the server just read, so the id always exists.  Any script
+    posting to these routes can, and those are the callers with no human
+    watching the page to notice nothing changed.  Not ``comments_cli.py``,
+    which exposes only ``list`` and ``post`` and never posts to these routes.
 
     404 rather than the 422 its sibling above uses: ``comment_id`` is a path
     segment naming a resource, so "no such comment" is what 404 is for, while
