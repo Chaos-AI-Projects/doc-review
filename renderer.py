@@ -171,11 +171,40 @@ def _assign_block_ids(blocks: list[dict]) -> list[dict]:
     are already identical and is invisible to every block whose text is unique.
 
     Identical *neighbours* are skipped when looking back, so a run of adjacent
-    copies shares one context.  Taking the context from an identical neighbour
-    would look more discriminating and be worse: inserting one more copy at the
-    head of the run would hand the first copy's context to the newcomer and
-    rebind its comments.  An adjacent run stays ambiguous and falls back to the
-    occurrence number, which is where it already was.
+    copies shares one context.  The case for it is a *deletion* inside a
+    two-copy run (#494 item 3), which is what
+    ``test_deleting_the_copy_above_keeps_the_run_tails_comment_attached``
+    pins: the survivor still records the context the comment stored, and the
+    copies elsewhere in the document record a different one, so the comment is
+    placed on the survivor.  Take the context from the identical neighbour
+    instead and the tail stores the digest of the copy above it, which no
+    survivor records at all; the context match is empty, resolution falls
+    through to the occurrence number the deletion has just retired, and the
+    comment is reported detached although its paragraph is still in the file.
+
+    That case, and not a general guarantee (#539 review).  Neither rule
+    dominates the other.  Every comparison below is made on the shape the test
+    writes — a document whose *only* run of two or more copies of the text is
+    the one being edited, isolated copies elsewhere allowed.  A second run of
+    that text breaks each of them in turn and in both directions, so none of
+    this is an ordering; it is why the choice rests on the case with a test
+    behind it rather than on a count of hypotheticals.
+
+    Within that shape, the argument above runs backwards on a longer run:
+    delete the copy above the tail of a *three*-copy run and the shared context
+    matches both survivors, so the match is not unique and the stored ordinal is
+    all that is left — it detaches the comment, or, where an isolated copy later
+    in the document keeps that ordinal alive, silently moves it onto that
+    unrelated copy, while the per-neighbour context would have named the
+    survivor exactly.  Insertion at the head of a run is decided by neither *for
+    a comment on that run* (three independent enumerations, no case) — the
+    *head* copy's comment lands on the newcomer either way, a comment further
+    down the run lands on the copy above it either way.  An insertion that
+    *splits* the two-copy run is the case that runs against the skip: wherever
+    the two rules disagree there, the per-neighbour context is the one that is
+    right.  Split a longer run and even that reverses — split immediately above
+    the tail of a three-copy run and the skip resolves the comment correctly
+    while the per-neighbour context misses it by two paragraphs.
     """
     seen: dict[str, int] = {}
     digests = [

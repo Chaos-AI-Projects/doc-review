@@ -7521,6 +7521,22 @@ class TestDuplicateBlockDisambiguation:
         Skipping the identical neighbour is what keeps the stored context
         pointing at 'alpha', which still exists and still names exactly one of
         the two surviving copies.
+
+        #494 item 3 asked for the mirror scenario — a copy *inserted* at the
+        head of the run — and this deletion stands in for it deliberately
+        (#499 item 2).  That insertion does not discriminate: the head copy's
+        comment lands on the newcomer with the skip and without it alike, and
+        three independent enumerations over head-of-run insertions found no
+        case — for a comment on the run being inserted into — in which the skip
+        changes the answer.  Deletion is where it changes one — on the two-copy
+        run written here.  The scenario is load-bearing rather than incidental:
+        on a *three*-copy run the same deletion goes the other way, the shared
+        context matching both survivors so that the stored ordinal is left to
+        decide, and it either detaches the comment or moves it onto an unrelated
+        copy further down — where the per-neighbour context would have placed it
+        correctly, provided the document holds no second run of that text
+        (#539 review).  ``renderer.py``'s docstring carries the general form of
+        this comparison, and the caveat that it is not an ordering.
         """
         from server import build_view_payload
 
@@ -7544,11 +7560,12 @@ class TestDuplicateBlockDisambiguation:
         # copy at the top of the document is still at 3.
         assert _source_line(payload, 3) == "dup para"
         assert _source_line(payload, 7) == "dup para"
-        assert _placed(payload, tail["id"])["detached"] is False, (
+        placed = _placed(payload, tail["id"])
+        assert placed["detached"] is False, (
             "the commented paragraph is still in the file — deleting the "
             "identical copy above it must not report it as lost"
         )
-        assert _placed(payload, tail["id"])["line_start"] == 7, (
+        assert placed["line_start"] == 7, (
             "the surviving copy of the run is the one the comment was written "
             "on; the copy at the top of the document is a different block"
         )
@@ -7586,18 +7603,21 @@ class TestDuplicateBlockDisambiguation:
         conn = get_connection(db_path)
         stored = get_comment(conn, row["id"])
         conn.close()
-        assert stored["block_id"] is not None
-        # The exact digest, not `is not None` (#494 item 4): "" is a real value
-        # here — it is what a block at the top of the document is given — so a
-        # not-None assertion passes just as happily on a context that was
-        # defaulted as on one that was computed, which is the whole distinction
-        # this test exists to draw.  Expected value is read off `block_id`,
-        # whose digest is the block's text, so it stays honest if the context
-        # itself is broken.
-        beta = next(
-            b
-            for b in render_markdown_blocks(DUP_DOC)
-            if b["raw"].strip() == "beta"
+        # The exact ids, not `is not None` (#494 item 4, #499 item 3): a
+        # not-None assertion says a backfill happened, not that it named the
+        # block the comment was written on — and naming the wrong copy of a
+        # duplicate is the failure this test exists to catch.  For the context
+        # the point is sharper still: "" is a real value here — it is what a
+        # block at the top of the document is given — so not-None passes just as
+        # happily on a context that was defaulted as on one that was computed.
+        # Both expected values are read off `block_id`, whose digest is the
+        # block's text, so they stay honest if the context itself is broken.
+        blocks = render_markdown_blocks(DUP_DOC)
+        copies = [b for b in blocks if b["raw"].strip() == "dup para"]
+        beta = next(b for b in blocks if b["raw"].strip() == "beta")
+        assert stored["block_id"] == copies[1]["block_id"], (
+            "the backfilled id must name the copy at line 9 — the one after "
+            "'beta' — and not the copy above it"
         )
         assert stored["block_context"] == beta["block_id"].rsplit("-", 1)[0], (
             "the backfilled context must be the digest of 'beta', the nearest "
