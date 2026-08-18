@@ -7613,9 +7613,18 @@ class TestDuplicateBlockDisambiguation:
         # Both expected values are read off `block_id`, whose digest is the
         # block's text, so they stay honest if the context itself is broken.
         blocks = render_markdown_blocks(DUP_DOC)
-        copies = [b for b in blocks if b["raw"].strip() == "dup para"]
+        # Named the way the assertion message names it — the copy at line 9 —
+        # rather than as ``copies[1]``, which asked the reader to reconstruct an
+        # ordering the test never states (#499).  The two conditions together
+        # are what the row's identity rests on: line 9 is where the comment was
+        # written, and 'dup para' is what makes it ambiguous, so a ``DUP_DOC``
+        # that ever stops holding a copy there fails here instead of quietly
+        # turning this into a test about a unique block.
+        commented = next(
+            b for b in blocks if b["start_line"] == 9 and b["raw"].strip() == "dup para"
+        )
         beta = next(b for b in blocks if b["raw"].strip() == "beta")
-        assert stored["block_id"] == copies[1]["block_id"], (
+        assert stored["block_id"] == commented["block_id"], (
             "the backfilled id must name the copy at line 9 — the one after "
             "'beta' — and not the copy above it"
         )

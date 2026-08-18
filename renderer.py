@@ -174,21 +174,32 @@ def _assign_block_ids(blocks: list[dict]) -> list[dict]:
     copies shares one context.  The case for it is a *deletion* inside a
     two-copy run (#494 item 3), which is what
     ``test_deleting_the_copy_above_keeps_the_run_tails_comment_attached``
-    pins: the survivor still records the context the comment stored, and the
-    copies elsewhere in the document record a different one, so the comment is
-    placed on the survivor.  Take the context from the identical neighbour
-    instead and the tail stores the digest of the copy above it, which no
-    survivor records at all; the context match is empty, resolution falls
-    through to the occurrence number the deletion has just retired, and the
-    comment is reported detached although its paragraph is still in the file.
+    pins.  In the document that test writes: the survivor still records the
+    context the comment stored, and the copy elsewhere in the document records
+    a different one, so the comment is placed on the survivor.  Take the
+    context from the identical neighbour instead and the tail stores the digest
+    of the copy above it, which no survivor records at all; the context match
+    is empty, resolution falls through to the occurrence number the deletion
+    has just retired, and the comment is reported detached although its
+    paragraph is still in the file.
+
+    Both of those are that document's outcomes, and the scope stated below is
+    not enough to generalize them: each has counterexamples *inside* that scope
+    (#499).  What decides them is which other copies the document holds — a
+    copy elsewhere recording the same context as the run makes the context
+    match non-unique again, so the ordinal decides instead of the context, and
+    an ordinal that some surviving copy still answers to leaves the comment
+    attached, to that copy, where here it is detached.
 
     That case, and not a general guarantee (#539 review).  Neither rule
     dominates the other.  Every comparison below is made on the shape the test
     writes — a document whose *only* run of two or more copies of the text is
     the one being edited, isolated copies elsewhere allowed.  A second run of
-    that text breaks each of them in turn and in both directions, so none of
+    that text breaks each *rule* in turn and in both directions, so none of
     this is an ordering; it is why the choice rests on the case with a test
-    behind it rather than on a count of hypotheticals.
+    behind it rather than on a count of hypotheticals.  (Each rule, not each
+    comparison below: the head-of-run insertion is broken by nothing, second
+    run or not.)
 
     Within that shape, the argument above runs backwards on a longer run:
     delete the copy above the tail of a *three*-copy run and the shared context
