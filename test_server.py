@@ -773,19 +773,24 @@ def _silence_git(monkeypatch, *, when, raising):
     name promising the unanswered one — green, and exercising none of what it
     claims.
 
-    No test below can be fooled by a *wholly inert* `when=`: each asserts a
-    value that differs from git's un-silenced answer — usually after recording
-    that answer in an opening pre-check — so leaving git entirely alone fails
-    them.  A *misdirected* `when=`, pointed at some other real call, is a
+    No test below can be fooled by a *wholly inert* `when=`, though not all by
+    the same means: all but one assert a value that differs from git's
+    un-silenced answer — usually after recording that answer in an opening
+    pre-check — so leaving git entirely alone fails them.  The exception is
+    `test_an_unanswered_diff_does_not_make_a_clean_file_dirty`, whose value is
+    `False` whether or not anything was silenced; an inert `when=` gets past
+    its assertion and is stopped by its argv check.  A *misdirected* `when=`,
+    pointed at some other real call, is a
     narrower question and the answer depends on the guard.  The three tests
     over a guard that issues one git call (`_git_is_tracked()`,
-    `_git_has_head()`, `_git_matches_head()`) are safe for the same reason:
-    misdirect them and the single call under test answers normally.  The two
-    over `_git_head_if_clean()` are not — it is a chain of three calls and
-    every link returns `None`, the value those tests assert, so silencing any
-    other link of it passes them.  `_is_tracked_and_dirty()` is such a chain
-    too, with `False` at every link, which is why the test below names the
-    command it expects rather than counting.
+    `_git_has_head()`, `_git_matches_head()`) are safe for free: misdirect them
+    and the single call under test answers normally, which is not the value
+    they assert.  The chained guards have no such luck —
+    `_git_head_if_clean()` returns `None` at each of its three links and
+    `_is_tracked_and_dirty()` returns `False` at each of its own, so silencing
+    any link of either satisfies a test that reads only the guard's answer.
+    The three tests over those two therefore name the command they meant to
+    take away, against the argv recorded here, rather than counting the calls.
     """
     import server
 
@@ -825,22 +830,29 @@ class TestGitGaveNoAnswer:
         a real SHA onto a file that may differ from it in every line, and the
         anchor outlives the timeout that produced it.
 
-        `ls-files` and `rev-parse` are left working precisely so the test fails
-        for the diff and nothing else: the SHA is available throughout, and the
-        only thing missing is the permission to use it.
+        `ls-files` and `rev-parse` are left working precisely so the scenario
+        is the diff's alone: the SHA is available throughout, and the only
+        thing missing is the permission to use it.  That much is the setup;
+        it does not by itself make the `None` below the diff's, because every
+        link of this chain returns `None` and a `when=` aimed at either of the
+        others would pass while silencing a call this test never mentions.
+        The argv check is what separates those.
         """
         from server import _git_head_if_clean
 
         target = Path(git_source_dir) / "doc.md"
         assert _git_head_if_clean(target) is not None, "clean file, anchor expected"
 
-        _silence_git(
+        silenced = _silence_git(
             monkeypatch,
             when=("diff", "--quiet"),
             raising=subprocess.TimeoutExpired(cmd="git diff", timeout=5),
         )
 
         assert _git_head_if_clean(target) is None
+        assert any(c[3:5] == ["diff", "--quiet"] for c in silenced), (
+            "harness silenced some other link of the chain; this `None` is not the diff's"
+        )
 
     def test_an_unanswered_diff_is_not_reported_as_a_difference(
         self, monkeypatch, git_source_dir
@@ -968,18 +980,26 @@ class TestGitGaveNoAnswer:
         a `None`, but a caller that mapped this to `""` would write an empty
         anchor that later reads as a commit.  The trailing `or None` shows the
         empty string is already understood to be a non-answer here.
+
+        "After both gates have passed" is this test's premise, not something
+        its `None` demonstrates: silencing either gate instead makes
+        `_git_head_if_clean()` answer `None` just the same, so the argv check
+        is what says this one came from the missing SHA.
         """
         from server import _git_head_if_clean
 
         target = Path(git_source_dir) / "doc.md"
 
-        _silence_git(
+        silenced = _silence_git(
             monkeypatch,
             when=("rev-parse", "HEAD"),
             raising=subprocess.TimeoutExpired(cmd="git rev-parse", timeout=5),
         )
 
         assert _git_head_if_clean(target) is None
+        assert any(c[3:5] == ["rev-parse", "HEAD"] for c in silenced), (
+            "harness silenced some other link of the chain; this `None` is not the rev-parse's"
+        )
 
 
 class TestGitGuardsStayDistinct:
