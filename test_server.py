@@ -731,29 +731,6 @@ class TestGitPathspecs:
             "called; reading its name as a git option loses the tracked check"
         )
 
-    def test_a_filename_that_is_not_utf8_does_not_crash_the_guards(self, tmp_path):
-        """git quotes the offending name back on stderr, in the bytes it got.
-
-        POSIX filenames are bytes, so a name like ``bad\\xff.md`` is legal on
-        disk and arrives as a surrogate-escaped str.  `ls-files --error-unmatch`
-        echoes it into stderr verbatim, and capturing that stream in text mode
-        raises `UnicodeDecodeError` while decoding output nobody reads — from
-        inside the guard, so it escapes as a 500 on a plain page view rather
-        than as the "no git evidence" answer the guard is supposed to give.
-
-        Both guards must return their falsy answer instead of raising.
-        """
-        from server import _git_head_if_clean, _is_tracked_and_dirty
-
-        odd = tmp_path / os.fsdecode(b"bad\xff.md")
-        odd.write_bytes(b"git will never decode my name\n")
-        _git(tmp_path, "init", "-q")
-        _git(tmp_path, "config", "user.email", "test@example.com")
-        _git(tmp_path, "config", "user.name", "Test")
-
-        assert _git_head_if_clean(odd) is None
-        assert _is_tracked_and_dirty(odd) is False
-
 
 def _silence_git(monkeypatch, *, when, raising):
     """Make exactly the git calls matching *when* fail, leaving the rest real.
@@ -1070,6 +1047,40 @@ class TestGitGuardsStayDistinct:
             "a repo with no commits has nothing for the blame migration to "
             "arrive from, so its files must not be held back as dirty"
         )
+
+
+class TestGuardsSurviveNonUtf8Names:
+    """The git calls that *do* go through `_git_run()`, and its `errors="replace"`.
+
+    This class and `TestBlameSurvivesNonUtf8Content` below are the two halves of
+    one concern — strict text-mode decoding turning a legal byte into a 500 —
+    split by which side of `_git_run()` the call sits on.  Here it is the
+    guards, whose undecodable bytes arrive in the **name**; there it is blame,
+    whose undecodable bytes arrive in the **content**.
+    """
+
+    def test_a_filename_that_is_not_utf8_does_not_crash_the_guards(self, tmp_path):
+        """git quotes the offending name back on stderr, in the bytes it got.
+
+        POSIX filenames are bytes, so a name like ``bad\\xff.md`` is legal on
+        disk and arrives as a surrogate-escaped str.  `ls-files --error-unmatch`
+        echoes it into stderr verbatim, and capturing that stream in text mode
+        raises `UnicodeDecodeError` while decoding output nobody reads — from
+        inside the guard, so it escapes as a 500 on a plain page view rather
+        than as the "no git evidence" answer the guard is supposed to give.
+
+        Both guards must return their falsy answer instead of raising.
+        """
+        from server import _git_head_if_clean, _is_tracked_and_dirty
+
+        odd = tmp_path / os.fsdecode(b"bad\xff.md")
+        odd.write_bytes(b"git will never decode my name\n")
+        _git(tmp_path, "init", "-q")
+        _git(tmp_path, "config", "user.email", "test@example.com")
+        _git(tmp_path, "config", "user.name", "Test")
+
+        assert _git_head_if_clean(odd) is None
+        assert _is_tracked_and_dirty(odd) is False
 
 
 class TestBlameSurvivesNonUtf8Content:
