@@ -9,6 +9,7 @@ Usage:
     python comments_cli.py post --path doc.md --file-id FID \
         --line-start 1 --line-end 1 --body "Comment text" \
         [--author NAME] [--parent-id ID] [--base-url URL]
+    # --author defaults to "overlord"; pass it to sign as someone else.
 
 Talks to the HTTP API (GET/POST /api/comments), not the DB directly.
 """
@@ -22,6 +23,11 @@ import urllib.request
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:28080"
+
+# The CLI is the agent's posting surface, so an unsigned post is the agent's.
+# Leaving this at None let the server's own "anon" default win, which recorded
+# the same author under two names.
+DEFAULT_AUTHOR = "overlord"
 
 
 def _get(url: str) -> dict | list:
@@ -133,7 +139,10 @@ def main() -> None:
     pp.add_argument("--line-start", type=int, required=True)
     pp.add_argument("--line-end", type=int, required=True)
     pp.add_argument("--body", required=True, help="Comment body")
-    pp.add_argument("--author", default=None, help="Author name")
+    pp.add_argument(
+        "--author", default=DEFAULT_AUTHOR,
+        help=f"Author name (default: {DEFAULT_AUTHOR})",
+    )
     pp.add_argument("--parent-id", type=int, default=None,
                     help="Parent comment ID (for replies)")
 

@@ -110,6 +110,60 @@ class TestCliPost:
         assert data[0]["author"] == "cli-user"
 
 
+class TestCliPostAuthorDefault:
+    """A CLI post with no ``--author`` must be recorded as ``overlord``.
+
+    ``--author`` defaulted to ``None``, so the CLI left the field out of the
+    payload and the server's own default won (``_CommentCreate.author =
+    "anon"``).  Every agent comment posted without the flag therefore landed
+    under ``anon``, indistinguishable from a stranger: the live DB holds
+    ``overlord``x4 beside ``anon``x1, one identity split across two names.
+    The CLI is the agent's surface, so ``overlord`` is the honest default
+    there.
+    """
+
+    def _post(self, server_url, source_dir, body, extra=()):
+        from file_id import derive_file_id
+
+        fid = derive_file_id(str(Path(source_dir) / "test.md"))
+        result = subprocess.run(
+            [sys.executable, "comments_cli.py", "--base-url", server_url,
+             "post", "--path", "test.md", "--file-id", fid,
+             "--line-start", "1", "--line-end", "1", "--body", body,
+             *extra],
+            capture_output=True, text=True, timeout=10,
+            cwd=str(Path(__file__).parent),
+        )
+        assert result.returncode == 0, result.stderr
+        return int(result.stdout.split("#")[1].strip())
+
+    def _authors(self, server_url):
+        result = subprocess.run(
+            [sys.executable, "comments_cli.py", "--base-url", server_url,
+             "--json", "list", "--path", "test.md"],
+            capture_output=True, text=True, timeout=10,
+            cwd=str(Path(__file__).parent),
+        )
+        assert result.returncode == 0, result.stderr
+        return {c["id"]: c["author"] for c in json.loads(result.stdout)}
+
+    def test_omitting_author_records_overlord(self, server_url, source_dir):
+        cid = self._post(server_url, source_dir, "no author flag")
+        assert self._authors(server_url)[cid] == "overlord"
+
+    def test_an_explicit_author_still_wins(self, server_url, source_dir):
+        """Pinned separately: hardcoding ``overlord`` would pass the row above.
+
+        A human running the CLI must still be able to sign their own name, and
+        ``test_post_and_list_roundtrip`` only covers the flag on a fresh DB.
+        """
+        cid = self._post(
+            server_url, source_dir, "named author",
+            extra=("--author", "chaos"),
+        )
+        assert self._authors(server_url)[cid] == "chaos"
+
+
 class TestCliListDetachedTag:
     """`list`'s human-readable branch must say when a line is unreliable (#468 N2).
 

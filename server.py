@@ -569,6 +569,15 @@ def _parent_for_new_comment(
     block neither comment is on, and one whose fallback group is another block
     would be accepted although the reply comes back a root at ``depth 0``.
 
+    The file check runs before the block check, and for a parent both would
+    refuse that order decides which of the two the caller is told (#503 item 2).
+    "Another file" is the larger fact and the only one of the two they can act
+    on: told "another block", they go looking for the right block of the
+    document they posted against, which is not the document their parent is in.
+    Whether to *accept* does not depend on the order — a parent neither check
+    refuses is put through both whichever runs first — so only the message
+    moves.
+
     (Only a parent carrying a stored ``block_id`` is resolved at all.  That is
     the rule above — a row with none is in no block rather than another one —
     kept here as a fast path as well, since it saves reading and rendering the

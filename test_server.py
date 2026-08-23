@@ -5112,6 +5112,27 @@ class TestCrossBlockOrCrossFileExplicitParent:
             },
         )
 
+    def _post_form(self, client, parent_id, *, path="doc.md", line_start=5):
+        """The same create through the browser's route, which takes a form body.
+
+        ``follow_redirects=False`` because the accepting path answers 303 and
+        the redirect target is a full page render; following it would trade the
+        status this class asserts on for the status of a second request.
+        """
+        return client.post(
+            "/comment",
+            data={
+                "file_id": "fid",
+                "path": path,
+                "line_start": str(line_start),
+                "line_end": str(line_start),
+                "author": "tester",
+                "body": "a deliberate reply to a comment elsewhere",
+                "parent_id": str(parent_id),
+            },
+            follow_redirects=False,
+        )
+
     def test_a_parent_on_another_block_of_the_same_file_is_rejected(self, anchored):
         """L3 and L5 are different paragraphs, so they are different threads."""
         elsewhere = _post_json_comment(
@@ -5140,9 +5161,12 @@ class TestCrossBlockOrCrossFileExplicitParent:
         this test's own create.)  ``another block`` is the block guard's message
         and no other guard's, so it is what tells them apart.
 
-        Only that phrase is pinned, not the order of the guards (#503 item 2,
-        still open): the parent here is created on this same file through the
-        API, so the file guard has nothing to answer whichever check runs first.
+        The order of the guards is not pinned here and does not need to be: the
+        parent is created on this same file through the API, so the file guard
+        has nothing to answer whichever check runs first.  A parent both guards
+        would refuse is what tells them apart, and
+        ``test_a_parent_that_is_both_cross_file_and_cross_block_answers_file``
+        is the one request in this class that is one (#503 item 2).
 
         The status assertion earns its place in one direction only, and it is
         not the obvious one.  It does *not* catch a silent 201: a 201 body
@@ -5194,22 +5218,66 @@ class TestCrossBlockOrCrossFileExplicitParent:
         elsewhere = _post_json_comment(
             anchored["client"], line_start=3, body="on the first paragraph"
         )
-        resp = anchored["client"].post(
-            "/comment",
-            data={
-                "file_id": "fid",
-                "path": "doc.md",
-                "line_start": "5",
-                "line_end": "5",
-                "author": "tester",
-                "body": "a deliberate reply to a comment elsewhere",
-                "parent_id": str(elsewhere["id"]),
-            },
-            follow_redirects=False,
-        )
+        resp = self._post_form(anchored["client"], elsewhere["id"])
         assert resp.status_code == 422, (
             "the form route must refuse what the JSON route refuses, or the "
             f"browser is the one client that can still do it; got {resp.status_code}"
+        )
+
+    def test_the_form_route_rejects_a_cross_file_parent_too(self, anchored):
+        """The block rule reaching this route did not prove the file rule does (#503 item 4).
+
+        ``test_the_form_route_rejects_a_cross_block_parent_too`` is satisfied by
+        any guard the route reaches, and a *block* comparison is one.  The twin
+        file holds identical text, so the parent's ``block_id`` equals this
+        block's and a block-only guard answers "same block" -- the one request
+        that separates the two rules, which is why the JSON route pins it
+        separately in
+        ``test_a_parent_on_the_same_text_in_another_file_is_rejected``.  Without
+        this test the browser route could lose the file rule alone and stay
+        green.
+        """
+        (anchored["dir"] / "twin.md").write_text(DOC_465)
+        twin = _post_json_comment(
+            anchored["client"], path="twin.md", line_start=5, body="on twin"
+        )
+        here = _post_json_comment(anchored["client"], line_start=5, body="on doc")
+        assert twin["block_id"] == here["block_id"], "fixture assumption: same text"
+
+        resp = self._post_form(anchored["client"], twin["id"])
+        assert resp.status_code == 422, (
+            "the parent is in another file, so it is not in the thread this reply "
+            "will be rendered in, however identical the two blocks are; got "
+            f"{resp.status_code}"
+        )
+
+    def test_a_form_route_rejection_stores_nothing(self, anchored):
+        """The route's own insert must not half-happen either (#503 item 4).
+
+        ``test_a_cross_block_parent_stores_nothing`` pins this for the JSON
+        route only, and the two routes call ``create_comment`` at separate call
+        sites.  Here the guard runs as an *argument* to that call, so raising
+        keeps the insert from being reached at all -- but that is a property of
+        how this route is written, not of the guard, and a route that resolved
+        the parent after inserting would keep every status assertion in this
+        class green while writing a reply that renders as a root.
+
+        The status assertion is the fixture check: a 303 would mean the create
+        was accepted, and then an unchanged count would be measuring a route
+        that stored nothing for the wrong reason.
+        """
+        elsewhere = _post_json_comment(
+            anchored["client"], line_start=3, body="on the first paragraph"
+        )
+        before = _comment_count(anchored["db"])
+        resp = self._post_form(anchored["client"], elsewhere["id"])
+        assert resp.status_code == 422, (
+            "the count below only means anything if the create was refused; got "
+            f"{resp.status_code}"
+        )
+        assert _comment_count(anchored["db"]) == before, (
+            "a rejected create must leave the table as it found it; a row here is "
+            "a comment stored with a parent it will never render under"
         )
 
     def test_a_parent_on_the_same_text_in_another_file_is_rejected(self, anchored):
@@ -5297,9 +5365,12 @@ class TestCrossBlockOrCrossFileExplicitParent:
         row leaves ``parent_id N does not name an existing comment`` and the
         assertion accepts it, so a regression that broke the fixture would
         retire the coverage silently rather than fail.  Only the phrase is
-        pinned, not the order of the guards (#503 item 2, still open): the
-        twin's block is byte-identical and the reply is written on that block,
-        so the block guard cannot fire here whichever check runs first.
+        pinned, and not the order of the guards: the twin's block is
+        byte-identical and the reply is written on that block, so the block
+        guard cannot fire here whichever check runs first.  The order is pinned
+        by ``test_a_parent_that_is_both_cross_file_and_cross_block_answers_file``
+        instead, on the one request in this class both guards would refuse
+        (#503 item 2).
         """
         from db import create_comment, get_connection, init_db
         from file_id import derive_file_id
@@ -5348,6 +5419,75 @@ class TestCrossBlockOrCrossFileExplicitParent:
             "the 422 has to come from the *file* guard, or this test is not "
             "exercising the rule it is named for -- the not-found guard answers "
             f"422 and names the id as well; got {resp.json()!r}"
+        )
+
+    def test_a_parent_that_is_both_cross_file_and_cross_block_answers_file(
+        self, anchored
+    ):
+        """The file guard answers first, and that order is deliberate (#503 item 2).
+
+        Every other test in this class is answerable by one guard, so the two
+        can be swapped with the suite still green -- the only request that can
+        tell them apart is one both would refuse.  The parent here is written on
+        ``other.md``, whose text appears nowhere in ``doc.md``, at a line that
+        falls in ``doc.md``'s *first* paragraph while the reply is on its
+        second: the file check refuses it for the file, and the block check
+        would refuse it for the block.
+
+        Holding the file answer is worth a test because the two messages are not
+        equally useful.  "Another file" is the larger fact, and the only one of
+        the two the caller can act on: told "another block", they go looking for
+        the right block of the document they posted against, which is not the
+        document their parent is in.
+
+        Both halves are load-bearing, measured by swapping the two blocks in
+        ``_parent_for_new_comment()``: the request then answers ``another
+        block`` and only this test in the file fails.  ``another file`` is the
+        file guard's phrase and no other guard's, so it is what tells them
+        apart -- the not-found guard names the id too, so the id alone would
+        leave this green on a fixture that stored no parent at all.
+
+        The fixture assumption is asserted through ``_rendered_block_of()``,
+        which is what the block guard consults, and not on the stored ids.  The
+        two are different questions and the stored one is not this test's:
+        placement falls back to the parent's *line* when its text is absent
+        here, so a parent whose stored id differs can still be placed on the
+        reply's own block, leaving the block guard silent and this test green
+        on the file guard alone -- measured, by moving the parent's create to
+        ``line_start=5``, which leaves a stored-id assertion passing while the
+        suite goes green under the swap.
+        """
+        from server import _rendered_block_of
+
+        other = anchored["dir"] / "other.md"
+        other.write_text("# Elsewhere\n\nan entirely different paragraph\n\ntail\n")
+        parent = _post_json_comment(
+            anchored["client"], path="other.md", line_start=3, body="on other"
+        )
+        here = _post_json_comment(anchored["client"], line_start=5, body="on doc")
+        placed = _rendered_block_of(parent, anchored["doc"])
+        assert placed is not None and placed["block_id"] != here["block_id"], (
+            "fixture assumption: the block guard must have an objection of its "
+            "own, or the file guard is the only one that can answer and this "
+            "test pins nothing about the order; the parent places on "
+            f"{placed and placed['block_id']!r}, the reply on "
+            f"{here['block_id']!r}"
+        )
+
+        resp = self._post(anchored["client"], parent["id"])
+        assert resp.status_code == 422, (
+            "a parent in another file is refused whether or not the block rule "
+            f"also has an objection; got {resp.status_code} "
+            f"{resp.json() if resp.status_code == 201 else resp.text}"
+        )
+        detail = str(resp.json().get("detail", ""))
+        assert str(parent["id"]) in detail, (
+            f"the message must name the id the caller sent; got {resp.json()!r}"
+        )
+        assert "another file" in detail, (
+            "the file guard has to be the one that answers: it names the fix "
+            "the caller can make, while the block guard would send them into "
+            f"the wrong document to look for it; got {resp.json()!r}"
         )
 
     def test_a_legacy_parent_survives_a_target_the_server_cannot_read(self, anchored):
@@ -5544,6 +5684,108 @@ class TestCrossBlockOrCrossFileExplicitParent:
         assert resp.json()["parent_id"] == legacy["id"], (
             "the explicit parent must survive -- derivation would answer None "
             "here, since the row carries no block_id to be the latest of"
+        )
+
+    def test_what_that_201_costs_the_reply_comes_back_at_depth_0(self, anchored):
+        """The price of the test above, pinned rather than left to be discovered.
+
+        #503 item 1 asked whether the create should be refused, and the answer
+        shipped is no.  That answer is only half an answer while the reply's
+        fate goes unrecorded: the parent is placed by its line onto the L3
+        block, the reply is written on L5, and a thread is rendered per block,
+        so ``_thread_root_of`` stops the walk at a parent in another group and
+        the reply is its own root.  A 201 that reports a reply, and a view that
+        shows a root.
+
+        The pair is the point.  ``test_a_parent_with_no_block_id_is_still
+        _honoured`` says what the server answers; this says what the reader
+        sees, and the two together are the trade #503 item 1 wanted decided.
+        Asserting the groups first keeps the depth honest -- ``depth 0`` for a
+        comment sitting under its own parent would be a threading bug, and only
+        the split groups make it the documented outcome instead.  Measured: move
+        the legacy row to L5 and the reply renders at ``depth 1``, so the two
+        assertions cannot both be describing the same fact.
+
+        The door shuts behind the first reader.  This holds only while nobody
+        has viewed the document since the legacy row was written: the read path
+        backfills a ``block_id`` onto the row, and the identical create then
+        answers ``422 ... names a comment on another block`` (pinned by
+        ``test_a_parent_on_another_block_of_the_same_file_is_rejected``).  So
+        the ``_insert_row`` before any render is the condition, not a shortcut.
+
+        This is the same shape as the cost recorded in ``_may_be_content_id_of``
+        for the unreadable-target fail-open (#503 item 6): reached by a
+        different door, ending in the same "201 that is not a reply".
+        """
+        import server
+
+        legacy = _insert_row(anchored, body="pre-#465 row", block_id=None, line=3)
+        resp = self._post(anchored["client"], legacy["id"])
+        assert resp.status_code == 201, (
+            "nothing below is about this create unless it was accepted -- a "
+            "refusal here leaves the assertions to die on a KeyError with no "
+            f"message; got {resp.status_code} {resp.text}"
+        )
+        reply_id = resp.json()["id"]
+
+        payload = server.build_view_payload("doc.md")
+        assert (_group_of(payload, legacy["id"]), _group_of(payload, reply_id)) == (
+            3,
+            5,
+        ), (
+            "fixture assumption: the legacy row is backfilled onto the L3 block "
+            "while the reply is on L5. Asserted as the two line numbers rather "
+            "than as 'different', because 'different' also passes when the "
+            "parent has dropped out of the view entirely and _group_of answers "
+            f"None -- got parent in {_group_of(payload, legacy['id'])!r}, reply "
+            f"in {_group_of(payload, reply_id)!r}"
+        )
+        assert _find(payload, reply_id)["depth"] == 0, (
+            "the stored parent_id survives, but the reader never sees the "
+            "nesting: the parent is rendered on another block, so the reply is "
+            "a root in its own. That is what the 201 above buys; got depth "
+            f"{_find(payload, reply_id)['depth']}"
+        )
+        assert _find(payload, reply_id)["parent_id"] == legacy["id"], (
+            "the row still names its parent -- the depth is a rendering "
+            "consequence of the two being grouped apart, not a lost parent_id, "
+            "and a create that stopped storing the parent would satisfy the "
+            "depth assertion while breaking what this test describes"
+        )
+
+    def test_one_render_first_and_the_same_create_is_refused(self, anchored):
+        """The other side of the test above: the door shuts behind the first reader.
+
+        The 201-at-depth-0 outcome is not a property of the rows, it is a
+        property of nobody having looked yet.  Render the document once and the
+        read path backfills a ``block_id`` onto the legacy row, after which the
+        byte-identical create answers 422.  One unchanging pair of rows, two
+        different answers, decided by whether a reader got there first.
+
+        This is asserted rather than left standing in the neighbouring
+        docstring, because prose does not fail.  The nearest existing 422 pin,
+        ``test_a_parent_on_another_block_of_the_same_file_is_rejected``, builds
+        its parent through the API with a real ``block_id`` and so never walks
+        the backfill path.  A regression that answered 201 here would leave that
+        test and the depth-0 test above both green.
+        """
+        import server
+
+        legacy = _insert_row(anchored, body="pre-#465 row", block_id=None, line=3)
+
+        server.build_view_payload("doc.md")
+
+        resp = self._post(anchored["client"], legacy["id"])
+        assert resp.status_code == 422, (
+            "one render is the whole difference from the test above -- the row "
+            "now carries the L3 block_id the reader gave it, so the create is a "
+            f"cross-block reply and must be refused; got {resp.status_code} "
+            f"{resp.json() if resp.status_code == 201 else resp.text}"
+        )
+        assert "another block" in str(resp.json().get("detail", "")), (
+            "the refusal has to come from the *block* guard: the not-found and "
+            "another-file guards answer 422 as well, and either would pass a "
+            f"bare status check while meaning something else; got {resp.json()!r}"
         )
 
     def test_a_reply_to_a_detached_parent_is_still_created(self, anchored):
