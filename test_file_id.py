@@ -10,7 +10,7 @@ def test_git_blob_id_for_tracked_file():
     """A file tracked by git should return its blob object id."""
     # Use a file we know is in this repo
     repo_root = Path(__file__).resolve().parent.parent
-    readme = repo_root / "CLAUDE.md"
+    readme = repo_root / "README.md"
     if readme.exists():
         blob = git_blob_id(str(readme))
         assert blob is not None
@@ -54,7 +54,7 @@ def test_content_hash_id_differs_for_different_content():
 def test_derive_file_id_uses_git_for_tracked():
     """derive_file_id should use git blob id for tracked files."""
     repo_root = Path(__file__).resolve().parent.parent
-    readme = repo_root / "CLAUDE.md"
+    readme = repo_root / "README.md"
     if readme.exists():
         fid = derive_file_id(str(readme))
         # Should match git blob id
