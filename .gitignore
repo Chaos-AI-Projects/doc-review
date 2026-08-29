@@ -1,0 +1,6 @@
+__pycache__/
+uv.lock
+comments.db
+.pytest_cache/
+.venv/
+.python-version
