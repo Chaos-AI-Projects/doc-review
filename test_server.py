@@ -8232,14 +8232,26 @@ class TestParagraphReflow:
             "overflows the fixed-layout row and paints over .line-marker"
         )
 
-    def test_paragraphs_are_separated_without_a_trailing_gap(self, client):
-        """Each block is its own table row, so a bottom margin on the last
-        paragraph is padding between rows that nothing asked for."""
+    def test_paragraphs_are_separated(self, client):
+        """This assertion used to require a `.line-content p:last-child` rule
+        zeroing the bottom margin, on the premise that it only ever trimmed a
+        trailing gap.  `source_row_specs` puts each block in its own row, so
+        *every* top-level paragraph is its cell's only child and that rule was
+        the common case, not the edge one -- it cancelled the separation for
+        all of them.  Rendering "para one\\n\\npara two" yields two rows, each
+        holding a single `<p>`; see TestBodyIndentAndHeadingRhythm."""
         body = self._rule_for(client, ".line-content p")
         assert body is not None, "style.css must set explicit paragraph margins"
-        assert "margin:" in body
-        last = self._rule_for(client, ".line-content p:last-child")
-        assert last is not None and "margin-bottom: 0" in last
+        assert TestBodyIndentAndHeadingRhythm._em(body, "margin-bottom") > 0, (
+            "`margin:` being present is not the assertion -- `margin: 0` would "
+            "satisfy that while leaving the paragraphs touching"
+        )
+        assert self._rule_for(client, ".line-content p:last-child") is None, (
+            "an unscoped :last-child rule matches every top-level paragraph "
+            "here, so it removes the gap between paragraphs rather than the "
+            "one after the last; it belongs on the containers that really do "
+            "hold several, which are blockquote and li"
+        )
 
     def test_a_blockquote_is_indented_and_marked(self, client):
         """The `*` reset zeroes the UA's side margins, so a quote with no rule
@@ -8249,3 +8261,212 @@ class TestParagraphReflow:
         assert body is not None, "style.css must carry a .line-content blockquote rule"
         assert "padding-left:" in body
         assert "border-left:" in body
+
+
+class TestBodyIndentAndHeadingRhythm:
+    """Chaos, 2026-09-01, on the review view once the reflow change landed:
+    "all paragraphs, and the headings are starting from the same vertical
+    line.  i want each lines in the paragraphs start righter.  also, between
+    paragraphs and headings, there should be more spaces".
+
+    Two separate causes behind one report.  Nothing in style.css styles a
+    heading in review mode at all -- the `*` reset zeroes its UA margins and
+    no rule gives them back -- so a heading is a bold line touching the prose
+    on both sides and starting at the same column as it.  Separately, every
+    top-level paragraph is the only child of its cell, so the `p:last-child`
+    rule zeroed the one margin holding paragraphs apart.
+
+    The indent is a real left offset, not a first-line `text-indent`: "each
+    lines in the paragraphs start righter" asks for every line.  It is carried
+    once by the cell, with the headings taking it back out, rather than by a
+    margin on each block type -- see the tests below for why.
+    """
+
+    HEADINGS = [f".line-content > h{n}" for n in range(1, 7)]
+    SIDES = ("top", "right", "bottom", "left")
+
+    @staticmethod
+    def _rules(client):
+        css = re.sub(r"/\*.*?\*/", "", client.get("/static/style.css").text, flags=re.S)
+        css = re.sub(r"@media[^{]*\{", "", css)
+        return [
+            (sel.strip(), body)
+            for sel, body in re.findall(r"([^{}]*)\{([^{}]*)\}", css)
+        ]
+
+    @classmethod
+    def _em(cls, body, prop, unit="em"):
+        """The em length a rule ends up giving one margin side, or None.
+
+        Resolves the `margin` shorthand rather than only matching longhands.
+        A shorthand-blind reader does not just miss an assertion here, it
+        turns the negative tests below into vacuous ones: they check that
+        *no* heading rule sets a left margin, which passes trivially if the
+        reader cannot see `margin: 1em 0 .3em` in the first place.
+        """
+        side = prop.split("-")[-1]
+        value = None
+        for name, raw in re.findall(r"([a-z-]+)\s*:\s*([^;]+)", body):
+            if name == "margin":
+                parts = raw.split()
+                # 1 value -> all sides; 2 -> block/inline; 3 -> top/inline/bottom.
+                if len(parts) == 1:
+                    expanded = parts * 4
+                elif len(parts) == 2:
+                    expanded = [parts[0], parts[1], parts[0], parts[1]]
+                elif len(parts) == 3:
+                    expanded = [parts[0], parts[1], parts[2], parts[1]]
+                else:
+                    expanded = parts[:4]
+                value = dict(zip(cls.SIDES, expanded))[side]
+            elif name == f"margin-{side}":
+                value = raw.strip()
+        # The sign matters: the heading outdent is a negative margin.  The unit
+        # is not cosmetic either -- `em` and `rem` resolve against different
+        # font-sizes, so a reader that conflated them would report agreement
+        # between a cell padding and a heading margin that do not agree.
+        m = re.fullmatch(rf"(-?[\d.]+){unit}", value or "")
+        return float(m.group(1)) if m else None
+
+    def _heading_rule(self, client):
+        """The rule that outdents and spaces headings in review mode.
+
+        Every heading test goes through this, so that none of them can pass
+        by finding nothing.  A negative assertion over an empty rule list is
+        vacuously true, which is how a test survives the stylesheet it was
+        written to describe being deleted.
+        """
+        found = [
+            (sel, body) for sel, body in self._rules(client)
+            if all(h in sel for h in self.HEADINGS)
+        ]
+        assert len(found) == 1, (
+            "exactly one rule should cover h1..h6 in review mode; found "
+            f"{len(found)}"
+        )
+        return found[0]
+
+    def _cell_rule(self, client):
+        """The `.line-content` cell rule that carries the body indent."""
+        for sel, body in self._rules(client):
+            if sel == ".line-content":
+                return body
+        raise AssertionError("style.css must carry a .line-content rule")
+
+    INDENT_TOKEN = "var(--md-indent)"
+
+    def test_body_text_starts_right_of_a_heading(self, client):
+        """The load-bearing assertion: a reader should be able to find the
+        headings by scanning one column, which needs the prose out of it.
+
+        The indent is a length the cell adds as padding and each heading takes
+        back as a negative margin.  Both cite one custom property rather than
+        repeating a number, so they cannot drift apart and a heading cannot
+        end up outside its own cell."""
+        root = next(
+            body for sel, body in self._rules(client) if sel == ":root"
+        )
+        m = re.search(r"--md-indent\s*:\s*([\d.]+)rem", root)
+        assert m and float(m.group(1)) > 0, (
+            "the indent must be a positive length defined once, in :root"
+        )
+        assert self.INDENT_TOKEN in self._cell_rule(client), (
+            "the cell must spend the token as its left padding"
+        )
+        _, heading = self._heading_rule(client)
+        assert self.INDENT_TOKEN in heading and "-1 *" in heading, (
+            "a heading must take the same token back out, negated"
+        )
+
+    def test_the_outdent_does_not_scale_with_the_heading(self, client):
+        """The unit is the whole assertion, not the number.  `em` on a margin
+        resolves against the element's *own* font-size, and no rule here sizes
+        these headings, so the UA sizes stand: h1 at 2em, h6 at .67em.  An
+        `em` outdent is therefore a different distance at every level -- h1
+        hangs clear outside the cell, and no two levels share a column, which
+        is the one thing the indent exists to give.  The cell's padding
+        resolves against the cell, so only a font-size-independent unit on the
+        heading can agree with it."""
+        _, heading = self._heading_rule(client)
+        for prop in ("margin-left", "margin-top", "margin-bottom"):
+            assert self._em(heading, prop) is None, (
+                f"{prop} must not be an em length on a heading whose "
+                "font-size is the UA's"
+            )
+
+    def test_the_indent_is_carried_by_the_cell_not_by_each_block(self, client):
+        """A per-block `margin-left` has to name every block type, so it
+        misses the ones nobody listed (`hr`, `pre.front-matter`); it applies
+        again to the same tags nested in a quote or list item, compounding per
+        level; and it puts a `max-width: 100%` table wider than the box meant
+        to bound it, back over `.line-marker`.  The cell has none of those
+        problems because it is the one box every block already shares."""
+        assert self.INDENT_TOKEN in self._cell_rule(client), (
+            "anchor: a bare negative over an empty rule list proves nothing"
+        )
+        offenders = [
+            sel for sel, body in self._rules(client)
+            if ".line-content" in sel
+            and "h1" not in sel
+            and (self._em(body, "margin-left") or 0) > 0
+        ]
+        assert not offenders, f"body indent must live on the cell; found {offenders}"
+
+    def test_the_indent_is_not_a_first_line_indent(self, client):
+        """`text-indent` moves only the first line, which leaves every other
+        line of the paragraph in the heading's column."""
+        assert self.INDENT_TOKEN in self._cell_rule(client), (
+            "anchor: without a real indent this assertion means nothing"
+        )
+        assert not any(
+            "text-indent" in body
+            for sel, body in self._rules(client)
+            if ".line-content" in sel
+        )
+
+    def test_only_a_top_level_heading_is_outdented(self, client):
+        """A heading inside a blockquote or a list item is not a section
+        break, and outdenting it would hang it left of the text it belongs
+        to.  Only the child combinator distinguishes the two."""
+        sel, _ = self._heading_rule(client)
+        assert ".line-content h1" not in sel, (
+            "a descendant selector also matches a heading nested in a quote"
+        )
+
+    def test_a_heading_has_room_above_it(self, client):
+        """Without a top margin a heading sits against the paragraph above."""
+        _, body = self._heading_rule(client)
+        assert self._em(body, "margin-top", "rem") > 0
+
+    def test_a_heading_binds_to_the_section_it_opens(self, client):
+        """Equal space above and below leaves a heading floating between two
+        paragraphs instead of belonging to the one it introduces."""
+        _, body = self._heading_rule(client)
+        above = self._em(body, "margin-top", "rem")
+        below = self._em(body, "margin-bottom", "rem")
+        assert below is not None, "the rule must set both sides explicitly"
+        assert above > below
+
+    def test_the_heading_rule_stays_out_of_presentation_mode(self, client):
+        """A deck already sizes and spaces its own headings, and its blocks
+        share one container rather than getting a row each."""
+        sel, _ = self._heading_rule(client)
+        assert ".slide" not in sel
+
+    def test_a_wide_table_is_still_bounded_by_the_indented_cell(self, client):
+        """`width: max-content` with `max-width: 100%` is only safe while the
+        box it resolves against is the one the table sits in.  Indenting the
+        table itself would have left it 1.5em wider than that box, which is
+        how it gets back over `.line-marker`."""
+        table = next(
+            (
+                body for sel, body in self._rules(client)
+                if ".line-content table" in sel and "max-width" in body
+            ),
+            None,
+        )
+        assert table is not None, "style.css must bound the rendered table"
+        assert "max-width: 100%" in table
+        assert not self._em(table, "margin-left"), (
+            "an indented table overflows the cell that bounds it"
+        )

@@ -11,6 +11,13 @@
     --line-hover: #f3f4f6;
     --has-comment: #fef3c7;
     --nav-w: 220px;
+    /* How far body text sits right of its headings in the review view.  In
+     * `rem` on purpose: the cell sets this as padding and each heading takes
+     * it back as a negative margin, and an `em` on the heading would resolve
+     * against the heading's own font-size instead of the cell's.  The UA sizes
+     * h1 at 2em and h6 at .67em, so an `em` outdent puts every level in a
+     * different column and hangs h1 outside the cell entirely. */
+    --md-indent: 1.5rem;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -252,8 +259,16 @@ main { padding: 1rem; }
  * hard-wrapped paragraph kept the source's line breaks instead of reflowing to
  * the viewport.  The descendants whose spacing really is content carry their
  * own rule below. */
+/* The left padding carries the body indent: .5em of gutter plus 1.5em that the
+ * headings below pull back out of.  The indent lives here, on the cell, rather
+ * than as a `margin-left` on each block, because the cell is the one box that
+ * every block shares.  A per-block margin has to name each block type, which
+ * silently misses the ones added later (`hr`, `pre.front-matter`); it applies
+ * again to the same tags nested inside a quote or a list item, compounding the
+ * indent per level; and it puts a `max-width: 100%` table 1.5em wider than the
+ * box bounding it, which is how a wide table gets back over `.line-marker`. */
 .line-content {
-    padding: 0 .5em;
+    padding: 0 .5em 0 calc(.5em + var(--md-indent));
     overflow-wrap: break-word;
     cursor: pointer;
 }
@@ -262,14 +277,20 @@ main { padding: 1rem; }
 /* The `*` reset at the top of this file zeroes every margin, and #388 gave the
  * indent back to lists only.  Paragraphs and blockquotes were leaning on those
  * pre-wrap newlines for their separation, so these rules and the removal above
- * are one change: either half alone reads worse than neither. */
+ * are one change: either half alone reads worse than neither.
+ *
+ * The `:last-child` trim below is scoped to the two containers that really do
+ * hold several paragraphs.  Unscoped it matched every top-level paragraph as
+ * well, because `view_specs.source_row_specs` gives each block its own row and
+ * a paragraph is therefore the only child of its cell: a rule that reads as
+ * though it trims one trailing gap in fact cancelled the gap between every
+ * pair of paragraphs in the document. */
 .line-content p {
-    margin: 0 0 .5em;
+    margin: 0 0 .6em;
 }
 
-/* Each block is its own table row, so a bottom margin on the last paragraph is
- * space between rows rather than between paragraphs. */
-.line-content p:last-child {
+.line-content blockquote > p:last-child,
+.line-content li > p:last-child {
     margin-bottom: 0;
 }
 
@@ -290,6 +311,41 @@ main { padding: 1rem; }
 
 .line-content li {
     list-style-position: outside;
+}
+
+/* ── Heading rhythm inside source lines ── */
+/* Review mode styled headings not at all: the `*` reset takes the UA margins
+ * and nothing hands them back, so a heading sat flush against the paragraph
+ * above it, in the same column.  The negative left margin is the cell's indent
+ * spent: it cites the same `--md-indent` token the padding does, so the two
+ * cannot drift apart, and a heading lands back on the .5em gutter whatever
+ * that token is set to.
+ *
+ * The child combinator is load-bearing.  A heading inside a blockquote or a
+ * list item is not a section break, and outdenting it would hang it past the
+ * text it belongs to.
+ *
+ * The two vertical sides are deliberately unequal, because a heading belongs
+ * to the section it opens and equal space leaves it floating between two.
+ * Margins do not collapse out of a table cell, so the gap above a heading is
+ * this margin plus the previous row's .6em, which is the intent: a section
+ * break should outweigh a paragraph break.  These two are `rem` for the same
+ * reason as the outdent: in `em` an h1 would take twice the space of an h4.
+ * Known cost: `.line-marker` is `vertical-align: top`, so on a heading row the
+ * comment button sits this margin above the heading text.  Kept small, and in
+ * a unit that does not grow with the heading, for that reason.
+ *
+ * The presentation deck is not in this selector list.  It sizes its own
+ * headings (`.presentation .slide h1`) and puts many blocks in one container
+ * rather than a row each, so none of the arithmetic above holds there. */
+.line-content > h1,
+.line-content > h2,
+.line-content > h3,
+.line-content > h4,
+.line-content > h5,
+.line-content > h6 {
+    margin: .6rem 0 .2rem calc(-1 * var(--md-indent));
+    line-height: 1.25;
 }
 
 /* ── Inline code ── */
