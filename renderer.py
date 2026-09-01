@@ -29,12 +29,25 @@ _ALLOWED_ATTRS = {
     "code": {"class"},
     "div": {"class"},
     "pre": {"class"},
+    # A cell can also carry a `class`, which this table cannot express: it is
+    # synthesized from `style` by `_CELL_ALIGN_RE` below, never copied from the
+    # input.  Read both before answering "what can appear on a cell?".
     "td": {"align"},
     "th": {"align"},
 }
 
 _TAG_RE = re.compile(r"<(/?)(\w+)(\s[^>]*)?>", re.DOTALL)
 _ATTR_RE = re.compile(r'(\w+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|\S+)')
+
+# Column alignment is the one thing a markdown table can say that only `style`
+# can carry: markdown-it emits `style="text-align:…"` on each cell, and `style`
+# is whitelisted on no tag, so the alignment was dropped with it.  The value is
+# matched whole against three literals and translated into a class the
+# stylesheet knows.  Whitelisting `style` with a value pattern instead would put
+# a parser inside the one function whose job is not trusting its input.
+_CELL_ALIGN_RE = re.compile(
+    r"\s*text-align\s*:\s*(left|center|right)\s*;?\s*\Z", re.IGNORECASE
+)
 
 
 def _sanitize_html(html: str) -> str:
@@ -55,8 +68,13 @@ def _sanitize_html(html: str) -> str:
         kept_attrs = []
         for am in _ATTR_RE.finditer(attrs_str):
             attr_name = am.group(1).lower()
+            attr_val = am.group(2) if am.group(2) is not None else (am.group(3) or "")
+            if tag in ("td", "th") and attr_name == "style":
+                side = _CELL_ALIGN_RE.match(attr_val)
+                if side is not None:
+                    kept_attrs.append(f'class="align-{side.group(1).lower()}"')
+                continue
             if attr_name in allowed:
-                attr_val = am.group(2) if am.group(2) is not None else (am.group(3) or "")
                 # Block dangerous URI schemes in href
                 if attr_name == "href" and re.match(
                     r"\s*(javascript|data|vbscript):", attr_val, re.IGNORECASE

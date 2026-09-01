@@ -443,14 +443,44 @@ main { padding: 1rem; }
  * slide not centred.
  *
  * Nothing here keys off an `align` attribute, because no cell has one:
- * markdown-it emits column alignment as `style="text-align:…"`, and
- * `_sanitize_html` drops `style`.  Markdown column alignment is therefore
- * already lost in the renderer, which is a separate defect from this rule. */
+ * markdown-it emits column alignment as `style="text-align:…"`, which
+ * `_sanitize_html` translates into the `align-*` classes below. */
 .line-content th,
 .presentation .slide th {
     text-align: inherit;
     background: #f3f4f6;
     font-weight: 600;
+}
+
+/* Column alignment from the table's delimiter row.  A cell carries one of
+ * these only when the row asked for it, so a table with no alignment keeps the
+ * `inherit` above and reads exactly as before.  Two classes and a type outrank
+ * the one class and one type of the header rule, so an aligned header wins its
+ * column without `!important`.
+ *
+ * `th.` and `td.` rather than a bare descendant: `class` is whitelisted on
+ * `div`, `pre` and `code` too, and only the sanitizer's current refusal to
+ * pass an author-supplied `class` through keeps a non-cell from claiming an
+ * alignment.  Naming the tag closes that by construction instead. */
+.line-content th.align-left,
+.line-content td.align-left,
+.presentation .slide th.align-left,
+.presentation .slide td.align-left {
+    text-align: left;
+}
+
+.line-content th.align-center,
+.line-content td.align-center,
+.presentation .slide th.align-center,
+.presentation .slide td.align-center {
+    text-align: center;
+}
+
+.line-content th.align-right,
+.line-content td.align-right,
+.presentation .slide th.align-right,
+.presentation .slide td.align-right {
+    text-align: right;
 }
 
 .line-marker {

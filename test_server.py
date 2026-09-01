@@ -8155,10 +8155,34 @@ class TestMarkdownTableBorders:
 
     def test_no_rule_keys_off_an_align_attribute(self, client):
         """markdown-it-py emits `style="text-align:…"` for column alignment and
-        `_sanitize_html` strips `style`, so no cell ever carries `align`.  A
-        selector matching on it is dead, and reads as though alignment works."""
+        `_sanitize_html` translates it into an `align-*` class.  No cell ever
+        carries an `align` attribute, so a selector matching on one is dead and
+        reads as though alignment works."""
         css = re.sub(r"/\*.*?\*/", "", client.get("/static/style.css").text, flags=re.S)
         assert "[align]" not in css
+
+    def test_each_alignment_class_has_a_rule(self, client):
+        """The class the renderer emits is half a fix on its own.  Both halves
+        ship together or a `:---:` delimiter row still renders flush left,
+        which is the defect MS-602 describes."""
+        for side in ("left", "center", "right"):
+            body = self._rule_for(client, f".align-{side}")
+            assert body is not None, f"style.css needs an .align-{side} rule"
+            assert f"text-align: {side}" in body
+
+    def test_the_alignment_rules_name_the_cell_tag(self, client):
+        """`class` is whitelisted on `div`, `pre` and `code` as well, so a bare
+        `.align-center` descendant selector leaves only the sanitizer standing
+        between a non-cell and an alignment it never asked for.  `th.`/`td.`
+        closes that by construction."""
+        for sel, _ in self._rules(client):
+            if ".align-" not in sel:
+                continue
+            for part in sel.split(","):
+                if ".align-" in part:
+                    assert re.search(r"\b(th|td)\.align-", part), (
+                        f"alignment selector must name the cell tag: {part.strip()}"
+                    )
 
     def test_the_table_rule_also_covers_presentation_mode(self, client):
         """A deck renders the same block HTML through `.slide-block`, which

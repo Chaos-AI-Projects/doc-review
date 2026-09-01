@@ -2,7 +2,7 @@
 
 import re
 
-from renderer import extract_toc, render_markdown_blocks
+from renderer import _sanitize_html, extract_toc, render_markdown_blocks
 
 
 # ── Block-level rendering ────────────────────────────────────────────────
@@ -99,6 +99,47 @@ def test_table_renders_as_one_table():
     assert "<table>" in html
     assert "<th>" in html or "<th" in html
     assert "<td>" in html or "<td" in html
+
+
+def test_column_alignment_survives_sanitizing():
+    """A `:---:` delimiter row must reach the browser.
+
+    markdown-it emits column alignment as `style="text-align:…"`, which the
+    sanitizer drops because `style` is whitelisted nowhere.  The alignment is
+    carried across as a class instead, so the sanitizer keeps its "no style
+    attribute anywhere" invariant and the column still renders aligned."""
+    source = "| A | B | C |\n|:--|:-:|--:|\n| 1 | 2 | 3 |"
+    html = render_markdown_blocks(source)[0]["html"]
+    assert "style=" not in html, "the sanitizer must still emit no style attribute"
+    for side in ("left", "center", "right"):
+        assert html.count(f'class="align-{side}"') == 2, (
+            f"the {side}-aligned column needs the class on its th and its td"
+        )
+
+
+def test_a_default_column_gets_no_alignment_class():
+    """`|---|` states no alignment, so the cell must not claim one: a class on
+    every cell would override whatever the container decides."""
+    source = "| A |\n|---|\n| 1 |"
+    html = render_markdown_blocks(source)[0]["html"]
+    assert "align-" not in html
+
+
+def test_sanitizer_translates_only_a_bare_text_align_on_a_cell():
+    """The translation is a whitelist of three literal values on two tags, not
+    a style parser.  Anything else — a second declaration smuggled in beside
+    the alignment, a value outside the three, or the same style on another
+    tag — is dropped whole, exactly as `style` was before."""
+    hostile = (
+        '<td style="text-align:left;background:url(javascript:alert(1))">x</td>'
+        '<th style="text-align:justify">y</th>'
+        '<td style="text-align:expression(alert(1))">z</td>'
+        '<p style="text-align:center">w</p>'
+    )
+    out = _sanitize_html(hostile)
+    assert "style=" not in out
+    assert "align-" not in out
+    assert "background" not in out
 
 
 # ── TDD: blocks expose line ranges ──────────────────────────────────────
