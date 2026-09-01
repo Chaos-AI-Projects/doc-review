@@ -246,11 +246,39 @@ main { padding: 1rem; }
     display: none;
 }
 
+/* No `white-space` here on purpose.  The cell held raw source lines until
+ * #393 swapped it to rendered markdown, and the `pre-wrap` left behind turned
+ * every newline markdown-it emits between block tags into a visible break — a
+ * hard-wrapped paragraph kept the source's line breaks instead of reflowing to
+ * the viewport.  The descendants whose spacing really is content carry their
+ * own rule below. */
 .line-content {
     padding: 0 .5em;
     overflow-wrap: break-word;
-    white-space: pre-wrap;
     cursor: pointer;
+}
+
+/* ── Paragraph and quote indent inside source lines ── */
+/* The `*` reset at the top of this file zeroes every margin, and #388 gave the
+ * indent back to lists only.  Paragraphs and blockquotes were leaning on those
+ * pre-wrap newlines for their separation, so these rules and the removal above
+ * are one change: either half alone reads worse than neither. */
+.line-content p {
+    margin: 0 0 .5em;
+}
+
+/* Each block is its own table row, so a bottom margin on the last paragraph is
+ * space between rows rather than between paragraphs. */
+.line-content p:last-child {
+    margin-bottom: 0;
+}
+
+/* 1.5em is the list indent used below, so a quote and a bullet at the same
+ * depth line up to within the width of the rule itself. */
+.line-content blockquote {
+    padding-left: 1.5em;
+    border-left: 3px solid var(--border);
+    color: #57606a;
 }
 
 /* ── List indent inside source lines ── */
@@ -265,12 +293,15 @@ main { padding: 1rem; }
 }
 
 /* ── Inline code ── */
+/* Runs of spaces inside a code span are content, not formatting, so this is
+ * the one inline element that keeps the whitespace mode the cell gave up. */
 .line-content code {
     background: #f3f4f6;
     padding: .1em .3em;
     border-radius: 3px;
     font-family: "SF Mono", "Fira Code", "Consolas", monospace;
     font-size: .9em;
+    white-space: pre-wrap;
 }
 
 /* ── Fenced code blocks (<pre><code> from markdown parser) ── */
@@ -285,22 +316,85 @@ main { padding: 1rem; }
     white-space: pre;
 }
 
+/* `white-space` is restated because the inline-code rule above matches this
+ * element too, and a declaration ON the element beats the `pre` its parent
+ * only offers by inheritance.  Without it fenced code soft-wraps and the
+ * `overflow-x: auto` above becomes unreachable. */
 .line-content pre code {
     background: none;
     padding: 0;
     border-radius: 0;
     font-size: inherit;
+    white-space: pre;
 }
 
 /* ── Mermaid diagram containers ── */
+/* The div holds escaped diagram source until mermaid.js replaces it, and it
+ * stays visible when the parse fails.  Reflowed onto one line it is unreadable,
+ * so the container keeps its own `pre` rather than relying on the cell's. */
 .line-content .mermaid {
     background: #fff;
     padding: .25em 0;
+    white-space: pre;
+    overflow-x: auto;
 }
 
 .line-content .mermaid svg {
     max-width: 100%;
     height: auto;
+}
+
+/* ── Markdown tables ── */
+/* Review and present are one selector list rather than two rules: a deck
+ * renders the same block HTML into `.slide-block`, which does not sit under
+ * `.line-content`, and a separate copy is how the two drift apart.
+ *
+ * `max-width` alone does not bound a table, because its used width cannot go
+ * below min-content — one long URL in a cell would overflow the fixed-layout
+ * row and paint over `.line-marker`.  Laying the table out as a block lets
+ * `overflow` bite, so a wide table scrolls on its own instead: `max-content`
+ * keeps a narrow table narrow, and `border-collapse` is inherited, so the
+ * anonymous table box the rows still form picks it up. */
+.line-content table,
+.presentation .slide table {
+    border-collapse: collapse;
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow: auto;
+    margin: 0 0 .5em;
+}
+
+.line-content table:last-child,
+.presentation .slide table:last-child {
+    margin-bottom: 0;
+}
+
+/* Header and body cells are bordered together.  Bordering only `td` leaves the
+ * header row floating free of the grid it heads. */
+.line-content th,
+.line-content td,
+.presentation .slide th,
+.presentation .slide td {
+    border: 1px solid var(--border);
+    padding: .3em .6em;
+}
+
+/* The UA centres `th` and leaves `td` alone, so a header disagrees with its
+ * own column until something says otherwise.  `inherit` rather than `left`:
+ * the same block HTML renders into `.layout-centered` and `.theme-uncover`
+ * slides, where a hardcoded side would leave the header the one thing on the
+ * slide not centred.
+ *
+ * Nothing here keys off an `align` attribute, because no cell has one:
+ * markdown-it emits column alignment as `style="text-align:…"`, and
+ * `_sanitize_html` drops `style`.  Markdown column alignment is therefore
+ * already lost in the renderer, which is a separate defect from this rule. */
+.line-content th,
+.presentation .slide th {
+    text-align: inherit;
+    background: #f3f4f6;
+    font-weight: 600;
 }
 
 .line-marker {

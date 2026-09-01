@@ -8089,3 +8089,163 @@ class TestReadSurfacesAgree:
             "the comment on 'para two' now comes first in the file"
         )
         assert [c["line_start"] for c in listed] == [3, 5]
+
+
+class TestMarkdownTableBorders:
+    """A markdown table renders with no borders at all, so its cells run
+    together and a column boundary is invisible (Chaos, 2026-09-01)."""
+
+    @staticmethod
+    def _rules(client):
+        css = re.sub(r"/\*.*?\*/", "", client.get("/static/style.css").text, flags=re.S)
+        # Drop the `@media <query> {` openers; leaving them in pairs the query
+        # with the first nested selector and shifts every rule after it.
+        css = re.sub(r"@media[^{]*\{", "", css)
+        return [
+            (sel.strip(), body)
+            for sel, body in re.findall(r"([^{}]*)\{([^{}]*)\}", css)
+        ]
+
+    def _rule_for(self, client, selector):
+        for sel, body in self._rules(client):
+            if selector in sel:
+                return body
+        return None
+
+    def test_the_rendered_table_collapses_its_borders(self, client):
+        """Without `border-collapse` each cell draws its own edge, so every
+        interior rule is doubled and the table reads as a grid of boxes."""
+        body = self._rule_for(client, ".line-content table")
+        assert body is not None, "style.css must carry a .line-content table rule"
+        assert "border-collapse: collapse" in body
+
+    def test_every_cell_carries_a_border(self, client):
+        """The header cells and the body cells are styled together.  Bordering
+        only `td` leaves the header row floating free of the grid it heads."""
+        body = self._rule_for(client, ".line-content th")
+        assert body is not None, "style.css must border th and td together"
+        assert "border:" in body
+        assert "padding:" in body, "an unpadded cell puts text against the rule"
+
+    def test_a_wide_table_cannot_overflow_its_row(self, client):
+        """`max-width` alone does not bound a table: its used width cannot go
+        below min-content, and one long URL in a cell then paints over
+        `.line-marker`.  Scrolling the table needs no wrapper element as long
+        as it lays out as a block."""
+        body = self._rule_for(client, ".line-content table")
+        assert "display: block" in body
+        assert "width: max-content" in body
+        assert "overflow: auto" in body
+
+    def test_header_alignment_follows_the_container(self, client):
+        """The UA centres `th` while `td` stays left, so a header needs a rule.
+        It must be `inherit` rather than a fixed side: the same HTML renders
+        into `.layout-centered` slides, where a hardcoded `left` would leave
+        the header disagreeing with every cell under it."""
+        aligned = [
+            sel for sel, body in self._rules(client)
+            if "text-align: inherit" in body
+        ]
+        assert any(".line-content th" in sel for sel in aligned), (
+            "a th rule must set text-align: inherit"
+        )
+        assert any(".slide th" in sel for sel in aligned), (
+            "presentation headers need it too, for the same reason"
+        )
+
+    def test_no_rule_keys_off_an_align_attribute(self, client):
+        """markdown-it-py emits `style="text-align:…"` for column alignment and
+        `_sanitize_html` strips `style`, so no cell ever carries `align`.  A
+        selector matching on it is dead, and reads as though alignment works."""
+        css = re.sub(r"/\*.*?\*/", "", client.get("/static/style.css").text, flags=re.S)
+        assert "[align]" not in css
+
+    def test_the_table_rule_also_covers_presentation_mode(self, client):
+        """A deck renders the same block HTML through `.slide-block`, which
+        does not inherit `.line-content`.  One selector list for both keeps
+        review and present from drifting apart."""
+        table_sel = next(
+            sel for sel, _ in self._rules(client) if ".line-content table" in sel
+        )
+        cell_sel = next(
+            sel for sel, _ in self._rules(client) if ".line-content th" in sel
+        )
+        assert ".slide table" in table_sel
+        assert ".slide th" in cell_sel
+
+
+class TestParagraphReflow:
+    """`.line-content` inherited `white-space: pre-wrap` from #379, when the
+    cell held raw source lines.  #393 swapped it to rendered markdown and left
+    the rule, so every newline markdown-it emits between block tags became a
+    visible break: a hard-wrapped paragraph keeps the source's line breaks
+    instead of reflowing, and a loose list gains a blank line per `<li>`.
+
+    The two halves land together because the `*` reset at the top of the file
+    zeroes every margin.  Lists got their indent back in #388; paragraphs and
+    blockquotes never did, so those pre-wrap newlines were the *only* thing
+    separating stacked paragraphs.  Dropping pre-wrap alone collides them, and
+    restoring the margins alone leaves the source's line breaks in."""
+
+    @staticmethod
+    def _rule_for(client, selector):
+        css = re.sub(r"/\*.*?\*/", "", client.get("/static/style.css").text, flags=re.S)
+        for sel, body in re.findall(r"([^{}]*)\{([^{}]*)\}", css):
+            if sel.strip() == selector:
+                return body
+        return None
+
+    def test_the_content_cell_does_not_preserve_source_newlines(self, client):
+        """The load-bearing assertion.  With pre-wrap the indent of every
+        nested block is whatever whitespace the serializer happened to emit."""
+        body = self._rule_for(client, ".line-content")
+        assert body is not None
+        assert "white-space" not in body, (
+            "the cell must not impose a whitespace mode on rendered markdown; "
+            "pre/pre-wrap belong on the descendants that need them"
+        )
+
+    def test_code_still_preserves_its_whitespace(self, client):
+        """Dropping the cell-wide rule must not collapse runs of spaces inside
+        inline code, which is the one inline element whose spacing is content."""
+        body = self._rule_for(client, ".line-content code")
+        assert body is not None
+        assert "white-space: pre-wrap" in body
+
+    def test_a_fenced_code_block_still_does_not_wrap(self, client):
+        """`.line-content code` matches `pre > code` too, and a rule ON the
+        element beats the `pre` its parent merely offers by inheritance.  Left
+        unscoped it soft-wraps fenced code and strands the `overflow-x: auto`
+        on `.line-content pre`, which nothing can then reach."""
+        body = self._rule_for(client, ".line-content pre code")
+        assert body is not None
+        assert "white-space: pre" in body and "pre-wrap" not in body
+
+    def test_unrendered_mermaid_source_preserves_its_line_breaks(self, client):
+        """Before mermaid.js loads, and after a parse error, the raw diagram
+        source is what the reader sees.  Reflowed, it is unreadable."""
+        body = self._rule_for(client, ".line-content .mermaid")
+        assert body is not None
+        assert "white-space: pre" in body
+        assert "overflow-x: auto" in body, (
+            "unwrapped source needs somewhere to go; without this a long line "
+            "overflows the fixed-layout row and paints over .line-marker"
+        )
+
+    def test_paragraphs_are_separated_without_a_trailing_gap(self, client):
+        """Each block is its own table row, so a bottom margin on the last
+        paragraph is padding between rows that nothing asked for."""
+        body = self._rule_for(client, ".line-content p")
+        assert body is not None, "style.css must set explicit paragraph margins"
+        assert "margin:" in body
+        last = self._rule_for(client, ".line-content p:last-child")
+        assert last is not None and "margin-bottom: 0" in last
+
+    def test_a_blockquote_is_indented_and_marked(self, client):
+        """The `*` reset zeroes the UA's side margins, so a quote with no rule
+        of its own is indented by nothing and reads as an ordinary paragraph.
+        The indent should line up with the 1.5em the lists beside it use."""
+        body = self._rule_for(client, ".line-content blockquote")
+        assert body is not None, "style.css must carry a .line-content blockquote rule"
+        assert "padding-left:" in body
+        assert "border-left:" in body
