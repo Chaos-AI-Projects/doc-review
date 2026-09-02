@@ -5,8 +5,12 @@ Block-anchored markdown review web app. Lets a reviewer read markdown source fil
 ## Quick Reference
 
 ```bash
-# Install dependencies (Python 3.10+)
-pip install fastapi uvicorn jinja2 markdown-it-py mdit-py-plugins httpx python-multipart
+# Install dependencies (Python 3.10+), declared in pyproject.toml.
+# Every command in this block is run from the monorepo root.
+pip install -e doc-review
+
+# Add the test dependencies as well
+pip install -e "doc-review[dev]"
 
 # Run server (serve a directory for review)
 python doc-review/server.py /path/to/docs --host 127.0.0.1 --port 28080

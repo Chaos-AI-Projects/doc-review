@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "doc-review"
+version = "0.1.0"
+description = "Block-anchored markdown review web app"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.141.1",
+    "jinja2>=3.1.6",
+    "markdown-it-py>=4.2.0",
+    "markupsafe>=3.0.3",
+    "mdit-py-plugins>=0.6.1",
+    "pydantic>=2.13.4",
+    "python-multipart>=0.0.32",
+    "uvicorn>=0.52.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+]
+
+# doc-review is a flat set of scripts, not a package: server.py does
+# `from db import ...`. Installing it declares the dependencies without
+# sweeping static/ and templates/ up as top-level packages.
+[tool.setuptools]
+py-modules = []
