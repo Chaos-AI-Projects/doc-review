@@ -506,7 +506,12 @@
             })
             .then(function (data) {
                 if (seq !== navSeq) return;  // superseded by a later click
-                applyDocument(renderer, data, renderer.renderBlocks(data.source));
+                // data.path, not currentPath: applyDocument has not run yet,
+                // so currentPath still names the file being navigated away
+                // from, and every relative link would resolve in its directory.
+                applyDocument(
+                    renderer, data, renderer.renderBlocks(data.source, data.path)
+                );
                 if (push) {
                     history.pushState(
                         { path: path }, "", navLogic.viewUrl(path)
@@ -593,7 +598,9 @@
     function presentationSpecs(renderer) {
         if (deckSpecs) return deckSpecs;
         var source = documentSource();
-        if (!currentBlocks) currentBlocks = renderer.renderBlocks(source);
+        if (!currentBlocks) {
+            currentBlocks = renderer.renderBlocks(source, currentPath);
+        }
         deckSpecs = renderer.presentationSpecs(
             currentBlocks, commentsData, source
         );

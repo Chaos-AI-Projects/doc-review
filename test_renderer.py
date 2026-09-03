@@ -517,3 +517,98 @@ def test_context_does_not_change_a_block_id():
     moved = render_markdown_blocks("rewritten opening\n\ntarget\n")[1]["block_id"]
     assert lonely == moved
     assert re.fullmatch(r"[0-9a-f]{16}-\d+", lonely)
+
+
+# ── Relative links between vault files ───────────────────────────────────
+#
+# A markdown link to a sibling file resolves against the *browser's* URL, which
+# is always `/view?path=...`, never the file's own directory.  So `[a](a.md)`
+# rendered verbatim sends the reader to `/a.md`, which the server does not
+# serve.  These pin the rewrite to `/view?path=<path from the source root>`.
+
+
+def _hrefs(source, doc_path=None):
+    html = "".join(b["html"] for b in render_markdown_blocks(source, doc_path))
+    return re.findall(r'href="([^"]*)"', html)
+
+
+def test_sibling_link_resolves_through_view():
+    assert _hrefs("[a](a.md)\n", "kb/wiki/index.md") == ["/view?path=kb/wiki/a.md"]
+
+
+def test_link_at_the_root_needs_no_directory_prefix():
+    assert _hrefs("[a](a.md)\n", "index.md") == ["/view?path=a.md"]
+
+
+def test_parent_and_dot_segments_are_resolved():
+    assert _hrefs("[a](../sources/a.md)\n", "kb/wiki/index.md") == [
+        "/view?path=kb/sources/a.md"
+    ]
+    assert _hrefs("[a](./a.md)\n", "kb/wiki/index.md") == ["/view?path=kb/wiki/a.md"]
+
+
+def test_a_fragment_survives_the_rewrite():
+    """The heading a link points *at* is part of what the author wrote."""
+    assert _hrefs("[a](a.md#usage)\n", "kb/index.md") == [
+        "/view?path=kb/a.md#usage"
+    ]
+
+
+def test_absolute_and_in_page_links_are_left_alone():
+    """Only a relative path is ambiguous; everything else already resolves."""
+    source = (
+        "[e](https://example.com/a.md)\n\n"
+        "[m](mailto:someone@example.com)\n\n"
+        "[r](/view?path=other.md)\n\n"
+        "[f](#a-heading)\n\n"
+        "[p](//example.com/a.md)\n"
+    )
+    assert _hrefs(source, "kb/index.md") == [
+        "https://example.com/a.md",
+        "mailto:someone@example.com",
+        "/view?path=other.md",
+        "#a-heading",
+        "//example.com/a.md",
+    ]
+
+
+def test_a_link_escaping_the_source_root_is_left_alone():
+    """The server would refuse it, and inventing a path it will not serve
+    dresses an unreachable link up as a working one."""
+    assert _hrefs("[a](../../etc/passwd)\n", "kb/index.md") == ["../../etc/passwd"]
+
+
+def test_no_doc_path_means_no_rewrite():
+    """Callers that want block ids and line ranges pass no path (#443 parity
+    fixture, comment anchoring), and must keep rendering what they always did."""
+    assert _hrefs("[a](a.md)\n") == ["a.md"]
+
+
+def test_the_target_is_safe_to_carry_in_a_query_string():
+    """markdown-it hands over an already percent-encoded path, so the rewrite
+    escapes only what a *query value* additionally cannot hold raw.  Left as
+    markdown-it wrote it, `x&y.md` would end the `path` parameter early."""
+    assert _hrefs("[a](<my file.md>)\n", "kb/index.md") == [
+        "/view?path=kb/my%20file.md"
+    ]
+    assert _hrefs("[a](x&y.md)\n", "kb/index.md") == ["/view?path=kb/x%26y.md"]
+    assert _hrefs("[a](100%.md)\n", "kb/index.md") == [
+        "/view?path=kb/100%25.md"
+    ], "an existing escape must not be escaped a second time"
+
+
+def test_a_single_level_climb_out_of_the_root_is_left_alone():
+    """`normpath` folds `kb/..` to `"."`, not to `".."`, so a one-level climb
+    looks nothing like the two-level one above and needs its own case."""
+    assert _hrefs("[a](..)\n", "kb/index.md") == [".."]
+
+
+def test_a_percent_encoded_climb_is_left_alone():
+    """markdown-it keeps an escape it is handed, so `%2e%2e` arrives with no
+    `..` segment for `normpath` to fold.  The guard decodes before judging."""
+    assert _hrefs("[a](%2e%2e/%2e%2e/etc/passwd)\n", "kb/index.md") == [
+        "%2e%2e/%2e%2e/etc/passwd"
+    ]
+    assert _hrefs("[a](..%2f..%2fetc%2fpasswd)\n", "kb/index.md") == [
+        "..%2f..%2fetc%2fpasswd"
+    ]

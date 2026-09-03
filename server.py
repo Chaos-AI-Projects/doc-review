@@ -956,7 +956,9 @@ def build_view_payload(path: str) -> dict:
     """
     file_path = _resolve_file(path)
     source = file_path.read_text(encoding="utf-8", errors="replace")
-    blocks = render_markdown_blocks(source)
+    # `path` is passed so links relative to this file resolve against its own
+    # directory rather than against `/view`, where the browser sits.
+    blocks = render_markdown_blocks(source, path)
     toc = extract_toc(source)
     fid = derive_file_id(str(file_path))
 

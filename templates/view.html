@@ -170,10 +170,15 @@ async function initPyodideRenderer() {
 
         // Publish the warm runtime so app.js can re-render other files
         // without re-booting Pyodide (#447).
-        const renderBlocks = (src) => {
+        // `docPath` is the file being rendered, so a link relative to it
+        // resolves against its own directory instead of against /view.  A soft
+        // swap must pass the path of the file it is swapping *in*: omit it and
+        // the client renders links this file's fresh /view render would not.
+        const renderBlocks = (src, docPath) => {
             pyodide.globals.set('_source', src);
+            pyodide.globals.set('_doc_path', docPath || null);
             return JSON.parse(pyodide.runPython(
-                "import json; json.dumps(render_markdown_blocks(_source))"
+                "import json; json.dumps(render_markdown_blocks(_source, _doc_path))"
             ));
         };
         // JSON in/out keeps plain dicts on the Python side (no JsProxy) so the
@@ -209,9 +214,15 @@ async function initPyodideRenderer() {
             ),
         };
 
-        // Render blocks client-side from embedded raw source
+        // Render blocks client-side from embedded raw source.  The path goes
+        // with it: this render REPLACES the server's HTML in the loop below,
+        // so leaving it out would put the unresolved relative links back on a
+        // page the server had already rendered correctly.
         const source = JSON.parse(document.getElementById('source-data').textContent);
-        const blocks = renderBlocks(source);
+        const docPath = JSON.parse(
+            document.getElementById('current-path-data').textContent
+        );
+        const blocks = renderBlocks(source, docPath);
 
         // Build a map from start_line to Pyodide-rendered block
         const blockMap = {};

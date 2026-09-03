@@ -8494,3 +8494,86 @@ class TestBodyIndentAndHeadingRhythm:
         assert not self._em(table, "margin-left"), (
             "an indented table overflows the cell that bounds it"
         )
+
+
+class TestRelativeLinksBetweenFiles:
+    """A link to a sibling file must survive the trip through /view.
+
+    The route is what proves it: the renderer can only rewrite a link if the
+    caller tells it which file the source came from, and `/view` is the caller
+    that knows.
+    """
+
+    @pytest.fixture
+    def linked_dir(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "kb").mkdir()
+            (root / "kb" / "index.md").write_text(
+                "[sibling](a.md) [up](../top.md) [out](https://example.com/a.md)\n"
+            )
+            (root / "kb" / "a.md").write_text("Target.\n")
+            (root / "top.md").write_text("Top.\n")
+            yield td
+
+    @pytest.fixture
+    def linked_client(self, linked_dir):
+        configure(linked_dir, Path(linked_dir) / "test_comments.db")
+        return TestClient(app)
+
+    def test_view_rewrites_a_relative_link(self, linked_client):
+        resp = linked_client.get("/view?path=kb/index.md")
+        assert resp.status_code == 200
+        assert 'href="/view?path=kb/a.md"' in resp.text
+        assert 'href="/view?path=top.md"' in resp.text
+        assert 'href="https://example.com/a.md"' in resp.text
+
+    def test_the_rewritten_link_is_a_url_the_server_serves(self, linked_client):
+        """The end of the bug: following the link reaches the file."""
+        resp = linked_client.get("/view?path=kb/index.md")
+        href = re.search(r'href="(/view\?path=kb/a\.md)"', resp.text).group(1)
+        assert linked_client.get(href).status_code == 200
+
+    def test_api_source_carries_the_path_the_client_renders_with(
+        self, linked_client
+    ):
+        """The SPA renders blocks itself, so it needs the path in the payload
+        or a soft-navigated file would show the dead links again (#447)."""
+        resp = linked_client.get("/api/source?path=kb/index.md")
+        assert resp.json()["path"] == "kb/index.md"
+
+    # The server half of this fix is pinned above.  These pin the client half,
+    # which is where the first version of it was broken: the browser re-renders
+    # every block through Pyodide and overwrites the server's HTML, so a call
+    # site that forgets the path silently puts the dead links back on a page
+    # that had already been rendered correctly.  Asserting on served text is
+    # how the suite already reaches app.js (see the reply-badge tests).
+
+    RENDER_CALL_RE = re.compile(r"renderBlocks\(([^)]*)\)")
+
+    def _render_call_args(self, text):
+        return [
+            m.group(1)
+            for m in self.RENDER_CALL_RE.finditer(text)
+            if "=>" not in m.group(1)  # the definition, not a call
+        ]
+
+    def test_every_client_render_call_passes_a_path(self, linked_client):
+        page = linked_client.get("/view?path=kb/index.md")
+        app_js = linked_client.get("/static/app.js")
+        calls = self._render_call_args(page.text) + self._render_call_args(
+            app_js.text
+        )
+        assert calls, "found no renderBlocks call sites to check"
+        for args in calls:
+            assert "," in args, (
+                f"renderBlocks({args}) renders without a path, so the blocks it "
+                "produces carry unresolved relative links"
+            )
+
+    def test_the_initial_render_uses_this_files_path(self, linked_client):
+        """Not `currentPath` read later, and not a hardcoded value: the path of
+        the document the page was served for."""
+        page = linked_client.get("/view?path=kb/index.md")
+        assert "current-path-data" in page.text
+        assert re.search(r"renderBlocks\(\s*source,\s*docPath\s*\)", page.text)

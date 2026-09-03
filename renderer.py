@@ -8,7 +8,9 @@ and returned with their source line ranges for comment anchoring.
 
 import hashlib
 import html as html_mod
+import posixpath
 import re
+from urllib.parse import quote, unquote
 
 from markdown_it import MarkdownIt
 from mdit_py_plugins.front_matter import front_matter_plugin
@@ -250,22 +252,107 @@ def _assign_block_ids(blocks: list[dict]) -> list[dict]:
     return blocks
 
 
-def _new_parser() -> MarkdownIt:
+# A scheme-qualified URI: `https:`, `mailto:`, `file:` (RFC 3986 §3.1).
+_URI_SCHEME_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*:")
+
+
+def _leaves_root(resolved: str) -> bool:
+    """Whether a normalized target has climbed out of the served root.
+
+    ``"."`` counts.  ``normpath`` spells the parent of a top-level file that
+    way — ``kb/index.md`` linking to ``..`` normalizes to ``"."``, not to
+    ``".."`` — so a one-level climb looks nothing like a two-level one.
+    """
+    return resolved in (".", "..") or resolved.startswith("../")
+
+
+def _resolve_doc_link(href: str, doc_path: str) -> str | None:
+    """Rewrite a relative link in *doc_path* to a URL the server answers.
+
+    Returns ``None`` for a link that already resolves and must be left exactly
+    as the author wrote it.
+
+    A relative href resolves against the *browser's* location, which for every
+    document this app shows is ``/view?path=…``.  So ``[a](a.md)`` in
+    ``kb/wiki/index.md`` asks the browser for ``/a.md`` — a route the server
+    does not serve, and a directory the file never meant.  The file's own
+    location is the only thing that says what ``a.md`` refers to, and the
+    renderer learns it only because the caller passes it in.
+
+    Left alone: an absolute or protocol-relative URL, anything carrying a
+    scheme, a root-relative path, and a bare ``#fragment``, which addresses the
+    page already on screen.  A target that climbs out of the source root is
+    also left alone: ``_resolve_file`` refuses it with a 403, and pointing it
+    at ``/view`` would dress a link the reader cannot follow up as a working
+    one.
+    """
+    if not href or href.startswith(("#", "/")) or _URI_SCHEME_RE.match(href):
+        return None
+
+    target, sep, fragment = href.partition("#")
+    if not target:
+        return None
+
+    base = posixpath.dirname(doc_path)
+    resolved = posixpath.normpath(posixpath.join(base, target))
+    # Checked decoded as well as raw.  markdown-it preserves a percent-escape
+    # it is given, so `%2e%2e/` reaches here still spelled that way and
+    # `normpath` has no `..` segment to fold.  `_resolve_file` would refuse the
+    # result with a 403 either way, but the point of the guard is to leave a
+    # link the reader cannot follow looking like one, rather than dressing it
+    # up as a working `/view` URL.
+    if _leaves_root(resolved) or _leaves_root(
+        posixpath.normpath(posixpath.join(base, unquote(target)))
+    ):
+        return None
+
+    # markdown-it has already percent-encoded both halves, and escapes a bare
+    # `%` as `%25` while doing so.  `safe="/%"` therefore adds only what a
+    # *query value* cannot additionally hold raw — `&` and `?` above all, which
+    # would otherwise end the `path` parameter early — without escaping the
+    # escapes a second time.  The fragment is encoded on the same terms rather
+    # than passed through: this function builds a URL, so what can appear in it
+    # is its own answer to give, not markdown-it's to be trusted for.
+    return (
+        f"/view?path={quote(resolved, safe='/%')}"
+        f"{sep}{quote(fragment, safe='/%')}"
+    )
+
+
+def _new_parser(doc_path: str | None = None) -> MarkdownIt:
     """Create a MarkdownIt parser with our standard settings.
 
     ``front_matter_plugin`` consumes a leading ``---`` metadata block as a
     single token (#452).  Without it CommonMark reads the closing ``---`` as a
     setext heading underline, so ``---\\nmarp: true\\n---`` renders as an
     ``<hr>`` followed by a bogus ``<h2>marp: true</h2>``.
+
+    With *doc_path*, links relative to that file are rewritten to ``/view``
+    URLs.  The rewrite is a renderer rule rather than a pass over the finished
+    HTML because a token's ``href`` is a parsed value, whereas the same string
+    in rendered markup has to be found again with a regex and un-escaped before
+    it can be read.  ``html: False`` means every ``<a>`` in the output came
+    from a markdown link, so the rule sees all of them.
     """
-    return (
+    md = (
         MarkdownIt("commonmark", {"html": False})
         .enable("table")
         .use(front_matter_plugin)
     )
+    if doc_path is not None:
+        default = md.renderer.renderToken
+
+        def _link_open(tokens, idx, options, env):
+            resolved = _resolve_doc_link(tokens[idx].attrGet("href") or "", doc_path)
+            if resolved is not None:
+                tokens[idx].attrSet("href", resolved)
+            return default(tokens, idx, options, env)
+
+        md.renderer.rules["link_open"] = _link_open
+    return md
 
 
-def render_markdown_blocks(source: str) -> list[dict]:
+def render_markdown_blocks(source: str, doc_path: str | None = None) -> list[dict]:
     """Parse *source* as markdown and return per-block data.
 
     Each entry:
@@ -283,9 +370,16 @@ def render_markdown_blocks(source: str) -> list[dict]:
     - ``html`` is the block rendered as sanitized HTML.
 
     Mermaid fenced blocks are rendered as ``<div class="mermaid">`` containers.
+
+    *doc_path* is *source*'s path relative to the served root, and only the
+    ``html`` depends on it: links relative to that file are rewritten to point
+    at ``/view``.  Callers that want block identity or line ranges — comment
+    anchoring, the parity fixture — pass nothing and get the html they always
+    got.  ``block_id`` hashes the block's ``raw`` source, so it does not move
+    either way.
     """
     lines = source.split("\n")
-    md = _new_parser()
+    md = _new_parser(doc_path)
     tokens = md.parse(source)
 
     if not tokens:
