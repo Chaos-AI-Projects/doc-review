@@ -2,13 +2,16 @@
 """Thin CLI for reading and posting doc-review comments via the JSON API.
 
 Usage:
+    # --base-url and --json are top-level flags, so they precede the
+    # subcommand.  argparse rejects them after it.
+
     # List comments for a file
-    python comments_cli.py list --path doc.md [--base-url URL] [--json]
+    python comments_cli.py [--base-url URL] [--json] list --path doc.md
 
     # Post a comment
-    python comments_cli.py post --path doc.md --file-id FID \
+    python comments_cli.py [--base-url URL] post --path doc.md --file-id FID \
         --line-start 1 --line-end 1 --body "Comment text" \
-        [--author NAME] [--parent-id ID] [--base-url URL]
+        [--author NAME] [--parent-id ID]
     # --author defaults to "overlord"; pass it to sign as someone else.
 
 Talks to the HTTP API (GET/POST /api/comments), not the DB directly.

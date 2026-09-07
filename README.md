@@ -41,6 +41,10 @@ out of the root is refused with a 403, but inside it there is no extension filte
 having no authentication, that makes the choice of root a security decision. Do not point it at a
 directory holding anything you would not publish to whoever can reach the port.
 
+Two routes serve the app's own source rather than anything under the root, so a careful choice of
+root does not govern them: `GET /spike/renderer.py` and `GET /py/view_specs.py`. The client renderer
+fetches them to run the same Python the server does.
+
 ## Render and review
 
 `GET /` lists the `.md` and `.markdown` files under the served root. `GET /view?path=<rel>` renders
@@ -66,17 +70,25 @@ thread instead of starting a second one. Each comment can be resolved and unreso
 
 The interesting part is where a comment goes when the document changes. Every block carries a
 `block_id` derived from its own normalized source plus an occurrence index, and that id is stored
-with the comment. A comment posted against a line that sits in no block, such as a blank line
-between two, gets no `block_id` and is placed by its line numbers alone. On every read, a comment is
-placed by three fallbacks in order:
+with the comment. On every read, a comment is placed by three fallbacks in order:
 
 1. Its `block_id`, matched against the blocks of the file as it is on disk now.
 2. The `anchor_commit` reverse-blame migration, which walks git history to find where the lines went.
+   This runs on `anchor_commit` alone, so it relocates a comment that has no `block_id` too. It is
+   skipped when the file is untracked or the tree is dirty.
 3. Its stored line numbers.
 
-A comment whose block no longer exists is still shown, flagged *detached*. It is never silently
-reattached to unrelated text. The web view and `GET /api/comments` run this through the same code,
-so both place a comment on the same line.
+A comment is never silently reattached to unrelated text. The web view and `GET /api/comments` run
+all of this through the same code, so both place a comment on the same line.
+
+`detached` marks a comment the placement is not confident about, and it is set in two cases:
+
+- The comment's stored `block_id` matched no block in the current file. Its block is gone.
+- The comment's line falls in no block at all, either past the end of the file or in the gap between
+  two blocks. A comment posted against a blank line is born this way and stays flagged even on an
+  untouched file, so `detached` here means "not anchored to a block", not "its anchor was lost".
+
+Either way it is still shown, placed at the nearest block.
 
 A comment is looked up by its **path**, which is what carries it across an edit. Renaming a file
 orphans its comments; there is no rename handling. `file_id` is a separate value, recorded on each
@@ -124,8 +136,8 @@ curl 'http://127.0.0.1:28080/api/comments?path=notes/design.md'
 Each entry carries `id`, `file_id`, `file_path`, `line_start`, `line_end`, `author`, `body`,
 `parent_id`, `resolved`, `created_at`, `updated_at`, `detached`, and the anchoring fields
 `block_id`, `block_offset`, `block_context` and `anchor_commit`. The line numbers are where the
-comment sits in the file as it is on disk now, not where it was written. `detached` says the
-placement could not be worked out.
+comment sits in the file as it is on disk now, not where it was written. See
+[Render and review](#render-and-review) for what `detached` does and does not mean.
 
 Posting a comment:
 
@@ -193,9 +205,9 @@ Front-matter directives:
 
 | Directive | Values | Effect |
 | --- | --- | --- |
-| `marp` | `true` | Required. Offers the document for presentation. |
-| `theme` | `default`, `gaia`, `uncover` | Deck styling. An unrecognised name falls back to `default`. |
-| `paginate` | `true` | Shows a slide number on each slide. |
+| `marp` | `true` | Required. Offers the document for presentation. Case-insensitive. |
+| `theme` | `default`, `gaia`, `uncover` | Deck styling. Case-**sensitive**, and an unrecognised name falls back to `default` silently, so `Gaia` gives you `default`. |
+| `paginate` | `true` | Shows a slide number on each slide. Case-insensitive. |
 
 ### Slide breaks
 
@@ -218,8 +230,9 @@ Some opening text.
 - another point
 ```
 
-A break is a thematic-break line made only of unspaced dashes, so `---`, `----` and longer all cut a
-slide. Nothing else does:
+A break is a thematic-break line whose only non-whitespace character is a dash, so `---`, `----` and
+longer all cut a slide, and surrounding indentation or trailing spaces do not stop them. Nothing
+else does:
 
 - `***` and `___` are thematic breaks in markdown too, but they stay visible as rules on the slide.
 - `- - -` is a thematic break as well, and the spaces disqualify it. It also stays visible.
