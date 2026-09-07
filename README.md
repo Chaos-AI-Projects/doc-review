@@ -41,9 +41,9 @@ out of the root is refused with a 403, but inside it there is no extension filte
 having no authentication, that makes the choice of root a security decision. Do not point it at a
 directory holding anything you would not publish to whoever can reach the port.
 
-Two routes serve the app's own source rather than anything under the root, so a careful choice of
-root does not govern them: `GET /spike/renderer.py` and `GET /py/view_specs.py`. The client renderer
-fetches them to run the same Python the server does.
+A few routes serve the app's own files rather than anything under the root, so a careful choice of
+root does not govern them: `/static/*`, `/spike/preview`, and `/spike/renderer.py` and
+`/py/view_specs.py`, which the client renderer fetches to run the same Python the server does.
 
 ## Render and review
 
@@ -85,10 +85,12 @@ all of this through the same code, so both place a comment on the same line.
 
 - The comment's stored `block_id` matched no block in the current file. Its block is gone.
 - The comment's line falls in no block at all, either past the end of the file or in the gap between
-  two blocks. A comment posted against a blank line is born this way and stays flagged even on an
-  untouched file, so `detached` here means "not anchored to a block", not "its anchor was lost".
+  two top-level blocks. A comment posted on such a line is born flagged and stays flagged on a file
+  nobody has touched, so `detached` here means "not anchored to a block", not "its anchor was lost".
+  Only a blank line *between* blocks does this. A blank line inside a fence or between loose list
+  items is within that block's line range and anchors normally.
 
-Either way it is still shown, placed at the nearest block.
+Either way the comment is still shown, grouped under the nearest block at or above its line.
 
 A comment is looked up by its **path**, which is what carries it across an edit. Renaming a file
 orphans its comments; there is no rename handling. `file_id` is a separate value, recorded on each
@@ -105,7 +107,7 @@ JavaScript.
 | Route | Body | Purpose |
 | --- | --- | --- |
 | `GET /api/comments?path=<rel>` | — | Comments for a file, placed against the current text and sorted by line. |
-| `POST /api/comments` | JSON | Create a comment or reply. Returns the created comment with `201`. |
+| `POST /api/comments` | JSON | Create a comment or reply. Returns the created comment with `201`. `422` if `parent_id` names no comment, or one on another file or block. |
 | `GET /api/source?path=<rel>` | — | Raw source, TOC, file id and comments for a file, without rendered blocks. |
 | `GET /api/blame?path=<rel>` | — | Per-line git blame for a tracked file. `404` when untracked, `502` when git does not answer. |
 | `POST /api/render` | JSON | Parse `{"source": "..."}` and return each block's `start_line` and `end_line`. |
@@ -166,7 +168,11 @@ python comments_cli.py post --path notes/design.md --file-id <id> \
 It talks to the HTTP API rather than the database, defaults to `http://127.0.0.1:28080`, and signs
 posts as `overlord` unless `--author` says otherwise.
 
-There is no authentication. Every route is open to anything that can reach the port.
+Two things to know before scripting against this. **A read can write.** Both `GET /api/comments` and
+`GET /view` persist what re-anchoring works out: the blame migration rewrites a comment's stored
+lines and `anchor_commit`, and a clean tree also backfills a missing `block_id`. That is deliberate,
+so blame runs once per edit rather than once per view, but it means a read is not side-effect free.
+And there is no authentication: every route is open to anything that can reach the port.
 
 ## Presentation support
 
@@ -231,12 +237,13 @@ Some opening text.
 ```
 
 A break is a thematic-break line whose only non-whitespace character is a dash, so `---`, `----` and
-longer all cut a slide, and surrounding indentation or trailing spaces do not stop them. Nothing
-else does:
+longer all cut a slide, as does one with trailing spaces or up to three leading ones. Nothing else
+does:
 
 - `***` and `___` are thematic breaks in markdown too, but they stay visible as rules on the slide.
 - `- - -` is a thematic break as well, and the spaces disqualify it. It also stays visible.
-- A `---` inside a code fence is content.
+- A `---` indented four spaces or a tab is an indented code block, not a thematic break, so it is
+  content. The same goes for one inside a fence or a list item.
 - A `---` directly under a line of text is a setext heading underline.
 
 Prefer plain `---`, which is what Marp itself documents.

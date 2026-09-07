@@ -9,7 +9,7 @@ Usage:
     python comments_cli.py [--base-url URL] [--json] list --path doc.md
 
     # Post a comment
-    python comments_cli.py [--base-url URL] post --path doc.md --file-id FID \
+    python comments_cli.py [--base-url URL] [--json] post --path doc.md --file-id FID \
         --line-start 1 --line-end 1 --body "Comment text" \
         [--author NAME] [--parent-id ID]
     # --author defaults to "overlord"; pass it to sign as someone else.
