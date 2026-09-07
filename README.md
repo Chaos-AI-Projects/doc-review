@@ -32,14 +32,19 @@ cd doc-review && pytest -v
 
 `server.py` takes the directory to serve as its one positional argument, plus `--host`, `--port` and
 `--db`. Give it a single file instead and it serves that file's parent directory. The database
-defaults to `comments.db` in the working directory. No *document* outside the served directory is
-reachable: a path that climbs out of it is refused with a 403. The `/spike` and `/py` routes are the
-exception, and they serve the app's own source rather than anything under the root.
+defaults to `comments.db` in the working directory.
+
+**Everything under the served directory is readable, not just the markdown.** A path that climbs
+out of the root is refused with a 403, but inside it there is no extension filter on the read path:
+`/view` and `/api/source` will serve a `.json`, a `.env` or a private key verbatim. `GET /` only
+*lists* `.md` and `.markdown`, which makes the rest unlisted rather than unreachable. Combined with
+having no authentication, that makes the choice of root a security decision. Do not point it at a
+directory holding anything you would not publish to whoever can reach the port.
 
 ## Render and review
 
 `GET /` lists the `.md` and `.markdown` files under the served root. `GET /view?path=<rel>` renders
-one of them.
+any file under it, listed or not, through the markdown renderer.
 
 The view is three columns on a desktop and stacked panels on a phone:
 
@@ -61,7 +66,9 @@ thread instead of starting a second one. Each comment can be resolved and unreso
 
 The interesting part is where a comment goes when the document changes. Every block carries a
 `block_id` derived from its own normalized source plus an occurrence index, and that id is stored
-with the comment. On every read, a comment is placed by three fallbacks in order:
+with the comment. A comment posted against a line that sits in no block, such as a blank line
+between two, gets no `block_id` and is placed by its line numbers alone. On every read, a comment is
+placed by three fallbacks in order:
 
 1. Its `block_id`, matched against the blocks of the file as it is on disk now.
 2. The `anchor_commit` reverse-blame migration, which walks git history to find where the lines went.
@@ -96,11 +103,16 @@ JavaScript.
 | `POST /comment` | form | The browser's create route. Answers `303`; prefer `POST /api/comments`. |
 
 The last three are form-encoded because the browser posts them, and they redirect rather than
-returning JSON. Sending them a JSON body gets a `422`:
+returning JSON. Send one a JSON body and it answers `422`, so post a form:
 
 ```bash
+# Correct. Answers 303.
 curl -X POST http://127.0.0.1:28080/comment/7/resolve \
   --data-urlencode 'path=notes/design.md'
+
+# Wrong. Answers 422: the `path` form field is missing.
+curl -X POST http://127.0.0.1:28080/comment/7/resolve \
+  -H 'Content-Type: application/json' -d '{"path": "notes/design.md"}'
 ```
 
 Reading comments:
@@ -206,9 +218,15 @@ Some opening text.
 - another point
 ```
 
-Only `---` cuts a slide. `***` and `___` are thematic breaks in markdown too, but they stay visible
-as rules on the slide rather than splitting the deck. A `---` inside a code fence is content, and a
-`---` directly under a line of text is a setext heading underline. Neither one splits anything.
+A break is a thematic-break line made only of unspaced dashes, so `---`, `----` and longer all cut a
+slide. Nothing else does:
+
+- `***` and `___` are thematic breaks in markdown too, but they stay visible as rules on the slide.
+- `- - -` is a thematic break as well, and the spaces disqualify it. It also stays visible.
+- A `---` inside a code fence is content.
+- A `---` directly under a line of text is a setext heading underline.
+
+Prefer plain `---`, which is what Marp itself documents.
 
 Adjacent breaks do not produce a blank slide.
 
@@ -297,6 +315,7 @@ doc-review/
 ├── parity_fixture.py  # Canonical fixture for server/client render parity
 ├── pyproject.toml     # Package + dev-dependency declaration
 ├── METADATA.toml      # Monorepo project metadata (copybara-sync action)
+├── .gitignore         # Build artifacts and the local comments DB
 ├── templates/
 │   ├── base.html
 │   ├── index.html     # File browser
