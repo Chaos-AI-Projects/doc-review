@@ -87,8 +87,8 @@ all of this through the same code, so both place a comment on the same line.
 - The comment's line falls in no block at all. That happens above the first block, past the end of
   the file, and in the gap between two top-level blocks. A comment posted on such a line is born
   flagged and stays flagged on a file nobody has touched, so `detached` here means "not anchored to a
-  block", not "its anchor was lost". Between blocks, a blank line does this, and so does a line that
-  renders nothing at all, such as a link reference definition. A blank line inside a fence or between
+  block", not "its anchor was lost". Between blocks, a blank line does this, and so does a line the
+  parser turns into no block, such as a link reference definition. A blank line inside a fence or between
   loose list items is within that block's line range and anchors normally.
 
 Either way the comment is still shown, grouped under the nearest block at or above its line. A
