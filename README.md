@@ -87,8 +87,9 @@ all of this through the same code, so both place a comment on the same line.
 - The comment's line falls in no block at all. That happens above the first block, past the end of
   the file, and in the gap between two top-level blocks. A comment posted on such a line is born
   flagged and stays flagged on a file nobody has touched, so `detached` here means "not anchored to a
-  block", not "its anchor was lost". Between blocks, only a blank line does this. A blank line inside
-  a fence or between loose list items is within that block's line range and anchors normally.
+  block", not "its anchor was lost". Between blocks, a blank line does this, and so does a line that
+  renders nothing at all, such as a link reference definition. A blank line inside a fence or between
+  loose list items is within that block's line range and anchors normally.
 
 Either way the comment is still shown, grouped under the nearest block at or above its line. A
 comment above the *first* block has no block above it, and groups under that first block instead.
@@ -172,9 +173,9 @@ posts as `overlord` unless `--author` says otherwise.
 Two things to know before scripting against this. **A read can write.** Both `GET /api/comments` and
 `GET /view` persist what re-anchoring works out: the blame migration rewrites a comment's stored
 lines and `anchor_commit`, and a missing `block_id` is backfilled. The backfill is skipped only for a
-file git tracks and reports as differing from HEAD, so it still runs on a clean tree, on an untracked
-file, and on a root with no git behind it. That is deliberate, so blame runs once per edit rather
-than once per view, but it means a read is not side-effect free.
+file git tracks and reports as differing from HEAD. Anything else backfills, including a clean tree,
+an untracked file, and a root with no git behind it. That is deliberate, so blame runs once per edit
+rather than once per view, but it means a read is not side-effect free.
 And there is no authentication: every route is open to anything that can reach the port.
 
 ## Presentation support
