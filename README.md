@@ -90,7 +90,8 @@ all of this through the same code, so both place a comment on the same line.
   Only a blank line *between* blocks does this. A blank line inside a fence or between loose list
   items is within that block's line range and anchors normally.
 
-Either way the comment is still shown, grouped under the nearest block at or above its line.
+Either way the comment is still shown, grouped under the nearest block at or above its line. A
+comment above the *first* block has no block above it, and groups under that first block instead.
 
 A comment is looked up by its **path**, which is what carries it across an edit. Renaming a file
 orphans its comments; there is no rename handling. `file_id` is a separate value, recorded on each
@@ -170,8 +171,10 @@ posts as `overlord` unless `--author` says otherwise.
 
 Two things to know before scripting against this. **A read can write.** Both `GET /api/comments` and
 `GET /view` persist what re-anchoring works out: the blame migration rewrites a comment's stored
-lines and `anchor_commit`, and a clean tree also backfills a missing `block_id`. That is deliberate,
-so blame runs once per edit rather than once per view, but it means a read is not side-effect free.
+lines and `anchor_commit`, and a missing `block_id` is backfilled. The backfill is skipped only for a
+file git tracks and reports as differing from HEAD, so it still runs on a clean tree, on an untracked
+file, and on a root with no git behind it. That is deliberate, so blame runs once per edit rather
+than once per view, but it means a read is not side-effect free.
 And there is no authentication: every route is open to anything that can reach the port.
 
 ## Presentation support
