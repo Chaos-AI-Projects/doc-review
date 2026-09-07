@@ -84,11 +84,11 @@ all of this through the same code, so both place a comment on the same line.
 `detached` marks a comment the placement is not confident about, and it is set in two cases:
 
 - The comment's stored `block_id` matched no block in the current file. Its block is gone.
-- The comment's line falls in no block at all, either past the end of the file or in the gap between
-  two top-level blocks. A comment posted on such a line is born flagged and stays flagged on a file
-  nobody has touched, so `detached` here means "not anchored to a block", not "its anchor was lost".
-  Only a blank line *between* blocks does this. A blank line inside a fence or between loose list
-  items is within that block's line range and anchors normally.
+- The comment's line falls in no block at all. That happens above the first block, past the end of
+  the file, and in the gap between two top-level blocks. A comment posted on such a line is born
+  flagged and stays flagged on a file nobody has touched, so `detached` here means "not anchored to a
+  block", not "its anchor was lost". Between blocks, only a blank line does this. A blank line inside
+  a fence or between loose list items is within that block's line range and anchors normally.
 
 Either way the comment is still shown, grouped under the nearest block at or above its line. A
 comment above the *first* block has no block above it, and groups under that first block instead.
