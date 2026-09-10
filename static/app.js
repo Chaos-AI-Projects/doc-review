@@ -798,6 +798,14 @@
         presentBtn.classList.add("active");
         showSlide(0);
         deckEl.focus();
+        // The deck carries the same un-rendered `<div class="mermaid">` the
+        // review rows do, so it needs a render pass of its own (MS-605).  Pass
+        // the deck rather than letting the root default to the document: the
+        // review DOM is hidden, not destroyed, and its already-rendered
+        // containers hold SVG whose textContent is not diagram source.
+        if (typeof renderer.initMermaid === "function") {
+            renderer.initMermaid(deckEl);
+        }
         // Last, and only after the deck is on screen: the request must come
         // from the click that got us here, and it must not be able to stop the
         // deck from being shown.

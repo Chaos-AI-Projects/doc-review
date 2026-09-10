@@ -55,14 +55,36 @@ The view is three columns on a desktop and stacked panels on a phone:
 - A **file navigator** with a filter box, a collapsible tree, and the current document's table of
   contents.
 - The **document**, one table row per markdown block, with the block's line range in the gutter.
-  A block is a heading, paragraph, list, table, code fence or similar. Clicking one opens the
-  comment form for it.
+  A block is a heading, paragraph, list, table, code fence, mermaid diagram or similar. Clicking one
+  opens the comment form for it.
 - A **comment sidebar** showing the comments on the block you clicked, above the form for adding
   another. It is per-block, not a listing of the whole file. For that, use `GET /api/comments` or
   `comments_cli.py list`.
 
 Relative links between served files are rewritten to `/view` URLs, so a link to a sibling document
 navigates inside the app rather than 404ing.
+
+### Mermaid diagrams
+
+A fence tagged `mermaid` is drawn as a diagram rather than shown as code:
+
+````markdown
+```mermaid
+graph TD
+    A-->B
+```
+````
+
+The server does not draw it. It emits the fence text escaped inside a `<div class="mermaid">`, and
+the browser fetches [mermaid](https://mermaid.js.org/) from `cdn.jsdelivr.net` and replaces that
+container with SVG. Three things follow from drawing it in the browser:
+
+- A browser with no route to the CDN shows the diagram source as plain text, and so does a diagram
+  mermaid cannot parse. The fallback is always the source you wrote, never a blank space.
+- Each fence is its own diagram. Two adjacent `mermaid` fences draw two diagrams, because one fence
+  is one block and one block is one container.
+- Diagrams are drawn on a presentation deck too, covered under
+  [Presentation support](#presentation-support).
 
 Comments thread. Posting against a block that already carries a comment appends to that block's
 thread instead of starting a second one. Each comment can be resolved and unresolved, and
@@ -185,6 +207,10 @@ A markdown file can be presented as a slide deck. The syntax is a subset of
 comment keeps its anchor across a mode flip.
 
 Presentation mode is read-only. The comment UI is unmounted while a deck is on screen.
+
+A slide draws its own mermaid diagrams. The deck inherits the un-rendered `<div class="mermaid">`
+along with the block, so entering presentation mode runs a render pass over the deck. The review
+view keeps the diagrams it already drew, because the two passes are scoped to their own DOM.
 
 ### Turning it on
 
@@ -348,8 +374,9 @@ doc-review/
 ├── static/
 │   ├── style.css      # Responsive CSS
 │   ├── app.js         # Comment interaction + presentation mode
-│   └── nav_logic.js   # Navigation, key mapping and fullscreen decisions,
-│                      # kept pure so they can be tested without a browser
+│   ├── nav_logic.js   # Navigation, key mapping and fullscreen decisions,
+│   │                  # kept pure so they can be tested without a browser
+│   └── mermaid_init.js # Mermaid container walk, shared by review and deck
 ├── test_db.py         # Data layer tests
 ├── test_file_id.py    # File ID derivation tests
 ├── test_renderer.py   # Renderer tests
@@ -361,6 +388,7 @@ doc-review/
 ├── test_server.py     # Route-level tests
 ├── test_spa_nav.js    # Soft-navigation tests (node)
 ├── test_tree_collapse.js # File-tree collapse tests (node)
+├── test_mermaid_init.js # Mermaid rendering tests (node)
 └── README.md          # This file
 ```
 

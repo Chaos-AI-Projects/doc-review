@@ -387,15 +387,22 @@ main { padding: 1rem; }
 /* ── Mermaid diagram containers ── */
 /* The div holds escaped diagram source until mermaid.js replaces it, and it
  * stays visible when the parse fails.  Reflowed onto one line it is unreadable,
- * so the container keeps its own `pre` rather than relying on the cell's. */
-.line-content .mermaid {
+ * so the container keeps its own `pre` rather than relying on the cell's.
+ *
+ * Review and present are one selector list, as for tables below: the deck
+ * draws its own diagrams into `.slide-block`, which does not sit under
+ * `.line-content`, so a slide would otherwise lose both the `pre` that makes
+ * the fallback readable and the bound on the rendered SVG. */
+.line-content .mermaid,
+.presentation .slide .mermaid {
     background: #fff;
     padding: .25em 0;
     white-space: pre;
     overflow-x: auto;
 }
 
-.line-content .mermaid svg {
+.line-content .mermaid svg,
+.presentation .slide .mermaid svg {
     max-width: 100%;
     height: auto;
 }

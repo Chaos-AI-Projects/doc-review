@@ -101,42 +101,32 @@
 
 {% block scripts %}
 <script src="/static/nav_logic.js?v={{ static_version('nav_logic.js') }}"></script>
+<script src="/static/mermaid_init.js?v={{ static_version('mermaid_init.js') }}"></script>
 <script src="/static/app.js?v={{ static_version('app.js') }}"></script>
 <script type="module">
 // ── Mermaid diagram rendering (reusable for re-render after Pyodide) ──
-async function initMermaid() {
-    if (!document.querySelector('.mermaid')) return;
-    const m = await import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs');
-    m.default.initialize({ startOnLoad: false, theme: 'default' });
-    const cells = document.querySelectorAll('td.line-content');
-    let group = [];
-    let groupCells = [];
-    const renderGroup = async () => {
-        if (!group.length) return;
-        const src = group.join('\n');
-        const container = groupCells[0].querySelector('.mermaid');
-        const id = 'mermaid-' + Math.random().toString(36).slice(2, 8);
-        try {
-            const { svg } = await m.default.render(id, src);
-            container.innerHTML = svg;
-            for (let i = 1; i < groupCells.length; i++) {
-                const d = groupCells[i].querySelector('.mermaid');
-                if (d) d.style.display = 'none';
-            }
-        } catch (_) { /* leave raw text visible on parse error */ }
-        group = [];
-        groupCells = [];
-    };
-    for (const cell of cells) {
-        const md = cell.querySelector('.mermaid');
-        if (md) {
-            group.push(md.textContent);
-            groupCells.push(cell);
-        } else {
-            await renderGroup();
-        }
+// The container walk lives in static/mermaid_init.js so Node can test it; the
+// CDN import and mermaid's own configuration stay here.  `root` defaults to
+// the document for review mode, and presentation mode passes the deck
+// (MS-605): the review DOM is hidden rather than destroyed, and its
+// already-rendered containers hold SVG whose textContent is not diagram
+// source.
+async function initMermaid(root = document) {
+    if (!root.querySelector('.mermaid')) return;
+    // Never rejects.  The first call below is a top-level await, so a CDN that
+    // will not load would otherwise abort this module before
+    // initPyodideRenderer() runs -- costing the Present button on any document
+    // that happens to contain a diagram.  A diagram that cannot be drawn must
+    // cost the diagram and nothing else; the escaped source stays on screen.
+    try {
+        const m = await import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs');
+        m.default.initialize({ startOnLoad: false, theme: 'default' });
+        await window.docReviewMermaid.renderMermaid(
+            root, (id, src) => m.default.render(id, src)
+        );
+    } catch (err) {
+        console.warn('Mermaid rendering unavailable, showing source:', err);
     }
-    await renderGroup();
 }
 
 // Initial mermaid render on server-side content (no-JS fallback path).

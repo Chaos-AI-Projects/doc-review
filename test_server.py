@@ -8215,7 +8215,9 @@ class TestParagraphReflow:
     def _rule_for(client, selector):
         css = re.sub(r"/\*.*?\*/", "", client.get("/static/style.css").text, flags=re.S)
         for sel, body in re.findall(r"([^{}]*)\{([^{}]*)\}", css):
-            if sel.strip() == selector:
+            # A rule shared by review and present is one selector list, so
+            # match each selector in it rather than the whole text.
+            if selector in [s.strip() for s in sel.split(",")]:
                 return body
         return None
 
@@ -8255,6 +8257,18 @@ class TestParagraphReflow:
             "unwrapped source needs somewhere to go; without this a long line "
             "overflows the fixed-layout row and paints over .line-marker"
         )
+
+    def test_a_slide_styles_its_mermaid_container_too(self, client):
+        """MS-605: the deck draws its own diagrams, into `.slide-block`, which
+        does not sit under `.line-content`.  Scoped to review only, a slide
+        loses the `pre` that keeps the fallback readable and the bound on the
+        rendered SVG."""
+        body = self._rule_for(client, ".presentation .slide .mermaid")
+        assert body is not None
+        assert "white-space: pre" in body
+        assert "overflow-x: auto" in body
+        svg = self._rule_for(client, ".presentation .slide .mermaid svg")
+        assert svg is not None and "max-width: 100%" in svg
 
     def test_paragraphs_are_separated(self, client):
         """This assertion used to require a `.line-content p:last-child` rule
@@ -8577,3 +8591,67 @@ class TestRelativeLinksBetweenFiles:
         page = linked_client.get("/view?path=kb/index.md")
         assert "current-path-data" in page.text
         assert re.search(r"renderBlocks\(\s*source,\s*docPath\s*\)", page.text)
+
+
+class TestMermaidWiring:
+    """MS-605: mermaid must render on the presentation deck, not just in review.
+
+    Two independent faults kept the deck showing raw source, and fixing either
+    alone left it raw: ``enterPresentation`` never asked for a render, and the
+    walk was scoped to the review table's ``td.line-content`` cells, which a
+    deck has none of.  The walk itself now lives in ``static/mermaid_init.js``
+    and is covered by ``test_mermaid_init.js``; these are the route-level
+    assertions over the thin plumbing that reaches it.
+    """
+
+    def _static(self, client, name):
+        resp = client.get(f"/static/{name}")
+        assert resp.status_code == 200
+        return resp.text
+
+    def test_mermaid_init_module_is_served(self, client):
+        js = self._static(client, "mermaid_init.js")
+        assert "function renderMermaid" in js
+        assert "docReviewMermaid" in js
+
+    def test_view_page_loads_the_module_versioned(self, client):
+        from server import static_version
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        expected = static_version("mermaid_init.js")
+        assert f"/static/mermaid_init.js?v={expected}" in resp.text
+
+    def test_init_mermaid_takes_a_root(self, client):
+        """Without a root argument the deck cannot be scanned on its own."""
+        resp = client.get("/view?path=test.md")
+        assert "async function initMermaid(root = document)" in resp.text
+        assert "root.querySelector('.mermaid')" in resp.text
+
+    def test_the_walk_is_not_inlined_in_the_template(self, client):
+        """Anti-drift: the template must delegate, not keep a second copy."""
+        resp = client.get("/view?path=test.md")
+        assert "docReviewMermaid.renderMermaid(" in resp.text
+        assert "td.line-content" not in resp.text, (
+            "the review-only cell selector must not come back"
+        )
+
+    def test_entering_presentation_renders_the_deck(self, client):
+        js = self._static(client, "app.js")
+        assert "renderer.initMermaid(deckEl)" in js, (
+            "enterPresentation must run a mermaid pass over the deck"
+        )
+
+    def test_the_deck_pass_runs_after_the_deck_is_mounted(self, client):
+        """A render over a deck not yet in the document measures nothing."""
+        js = self._static(client, "app.js")
+        assert js.index("document.body.appendChild(deckEl)") < \
+            js.index("renderer.initMermaid(deckEl)")
+
+    def test_mermaid_rendering_behavioral(self):
+        """Run the Node.js behavioral test against the shipped module."""
+        result = subprocess.run(
+            ["node", str(Path(__file__).parent / "test_mermaid_init.js")],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, \
+            f"Behavioral mermaid test failed:\n{result.stderr}"

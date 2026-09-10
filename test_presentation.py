@@ -679,3 +679,67 @@ class TestDirectiveBlockSuppression:
         html = " ".join(row["html"] for row in source_row_specs(layout_blocks))
         assert "_class: title" in html
         assert "class: quote" in html
+
+
+class TestMermaidReachesTheDeck:
+    """MS-605: a mermaid fence arrives on a slide as un-rendered source.
+
+    ``renderer.py`` emits escaped fence text inside ``<div class="mermaid">``
+    and leaves the drawing to the browser.  Presentation mode reuses those very
+    rows, so the deck inherits the container and must run its own render pass.
+    These assertions pin the contract the JS half depends on; the rendering
+    itself is covered by ``test_mermaid_init.js``.
+    """
+
+    MERMAID_DECK = "\n".join(
+        [
+            "---",
+            "marp: true",
+            "---",
+            "",
+            "# Slide one",
+            "",
+            "```mermaid",
+            "graph TD",
+            "    A-->B",
+            "```",
+            "",
+            "---",
+            "",
+            "# Slide two",
+            "",
+            "```mermaid",
+            "graph LR",
+            "    C-->D",
+            "```",
+            "",
+        ]
+    )
+
+    @pytest.fixture
+    def specs(self):
+        blocks = render_markdown_blocks(self.MERMAID_DECK)
+        return presentation_specs(blocks, None, self.MERMAID_DECK)
+
+    def test_the_deck_carries_the_container_not_a_diagram(self, specs):
+        html = " ".join(row["html"] for row in _rows(specs["slides"]))
+        assert '<div class="mermaid">' in html
+        assert "<svg" not in html
+
+    def test_each_fence_is_its_own_container(self, specs):
+        html = " ".join(row["html"] for row in _rows(specs["slides"]))
+        assert html.count('<div class="mermaid">') == 2
+
+    def test_the_source_survives_the_mode_flip_verbatim(self, specs):
+        """The deck's container must hold the same escaped source review mode
+        shows, because the browser renders from its ``textContent``."""
+        review = {
+            row["id"]: row
+            for row in source_row_specs(render_markdown_blocks(self.MERMAID_DECK))
+        }
+        deck_rows = [
+            row for row in _rows(specs["slides"]) if "mermaid" in row["html"]
+        ]
+        assert len(deck_rows) == 2
+        for row in deck_rows:
+            assert row["html"] == review[row["id"]]["html"]
