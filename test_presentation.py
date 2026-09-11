@@ -491,10 +491,16 @@ class TestCommentDirectives:
     """Reading directives out of a block.
 
     The parser runs with ``html: False``, so an HTML comment is **not**
-    invisible here: it arrives as a ``paragraph`` whose html is the *escaped*
-    comment text.  Before #462 a real Marp deck therefore rendered its own
-    directives as visible body text.  The directives have to be read from
-    ``raw`` and the block dropped, or the fix is only half done.
+    invisible here: it arrives as a ``paragraph`` carrying the comment text.
+    Before #462 a real Marp deck therefore rendered its own directives as
+    visible body text.  The directives have to be read from ``raw`` and the
+    block dropped, or the fix is only half done.
+
+    ``renderer.py`` now blanks the *html* of any comment-only block, so the
+    escaped text no longer shows in review mode either.  That is a second,
+    independent suppression: it hides every comment, this one drops directive
+    blocks off the slide.  Neither substitutes for the other, and both still
+    read the same ``raw``.
     """
 
     @staticmethod
@@ -505,10 +511,15 @@ class TestCommentDirectives:
 
     def test_a_directive_comment_is_not_invisible_to_the_parser(self):
         """The premise of the whole change — if this ever fails, comments have
-        become real HTML and the suppression below is dead code."""
+        become real HTML and the suppression below is dead code.
+
+        Read off ``raw``, not ``html``.  The renderer blanks the html of a
+        comment-only block, so an empty ``html`` no longer says anything about
+        how the parser typed it, while ``raw`` is what this module reads and
+        ``paragraph`` is what tells a directive from a code sample."""
         block = self._block("<!-- _class: title -->\n")
         assert block["type"] == "paragraph"
-        assert "_class" in block["html"]
+        assert "_class" in block["raw"]
 
     def test_a_spot_directive_is_read_from_raw(self):
         assert comment_directives(self._block("<!-- _class: title -->\n")) == {
@@ -615,11 +626,18 @@ class TestDirectiveBlockSuppression:
         assert "_class" not in html
         assert "class: quote" not in html
 
-    def test_an_ordinary_comment_still_renders(self, layout_blocks):
-        """Constraint 4: an unrecognised comment keeps today's behaviour rather
-        than being silently swallowed."""
-        html = " ".join(row["html"] for row in _rows(slide_specs(layout_blocks)))
-        assert "TODO: an ordinary comment" in html
+    def test_an_ordinary_comment_keeps_its_row(self, layout_blocks):
+        """Constraint 4: an unrecognised comment is not swallowed on a guess.
+
+        Its row survives onto the slide, and so does the comment anchor that
+        row carries.  What it no longer does is *show*: the renderer blanks the
+        html of every comment-only block, so this asserts the row is present
+        and empty.  Dropping the row and blanking its html look the same on
+        screen and are not the same thing — only one of them loses the
+        anchor."""
+        rows = {row["startLine"]: row for row in _rows(slide_specs(layout_blocks))}
+        assert 41 in rows, "the ordinary comment at line 41 left the deck"
+        assert rows[41]["html"] == ""
 
     def test_line_ranges_are_unchanged_by_suppression(self, layout_blocks):
         """The 2026-07-22 comment-loss guard, at the point of maximum risk:
@@ -674,11 +692,16 @@ class TestDirectiveBlockSuppression:
         assert [s["layout"] for s in slides] == ["default", "default"]
 
     def test_suppression_does_not_change_review_mode(self, layout_blocks):
-        """Review mode shows every block, directives included — this is a
-        presentation-mode grouping decision, not a parse change."""
-        html = " ".join(row["html"] for row in source_row_specs(layout_blocks))
-        assert "_class: title" in html
-        assert "class: quote" in html
+        """Review mode keeps a row for every block, directives included — this
+        is a presentation-mode grouping decision, not a parse change.
+
+        Asserted on the rows rather than on their text, because the renderer
+        blanks a comment's html in both modes.  The distinction this guards is
+        between a block *missing from review mode*, which would take its
+        comment anchor with it, and a block that is present and renders
+        nothing."""
+        rows = {row["startLine"] for row in source_row_specs(layout_blocks)}
+        assert {5, 15, 25, 35, 41, 47} <= rows
 
 
 class TestMermaidReachesTheDeck:

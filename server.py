@@ -1307,9 +1307,18 @@ async def spike_preview(request: Request):
 
 @app.get("/spike/renderer.py")
 async def spike_renderer_source():
-    """Serve renderer.py source for Pyodide to load verbatim."""
+    """Serve renderer.py source for Pyodide to load verbatim.
+
+    ``no-store`` for the reason ``/py/view_specs.py`` gives, where the
+    consequence is worse: the browser re-render *overwrites* the server's HTML,
+    so a cached renderer puts its own output onto a page the server had already
+    rendered correctly.  Every fix to this module then looks un-shipped to
+    whoever is holding the stale copy.
+    """
     source = (BASE_DIR / "renderer.py").read_text(encoding="utf-8")
-    return JSONResponse(content={"source": source})
+    resp = JSONResponse(content={"source": source})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 # ── Shared Python modules served to the browser (#451) ──────────────────

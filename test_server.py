@@ -1789,6 +1789,13 @@ class TestSpikePreview:
         assert "source" in data
         assert "render_markdown_blocks" in data["source"]
 
+    def test_renderer_source_is_not_cacheable(self, client):
+        """The browser re-render overwrites the server's HTML, so a cached copy
+        of this module undoes a shipped fix on a page already rendered with
+        it.  ``/py/view_specs.py`` has said so since #451; this is its twin."""
+        resp = client.get("/spike/renderer.py")
+        assert resp.headers["Cache-Control"] == "no-store"
+
 
 class TestBlameAPI:
     def test_blame_untracked_file_returns_404(self, client):

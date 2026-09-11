@@ -252,6 +252,13 @@ def _assign_block_ids(blocks: list[dict]) -> list[dict]:
     return blocks
 
 
+# A block that is one HTML comment and nothing else.  `(?!-->)` per character
+# is what makes it *one*: `<!-- a --> middle <!-- b -->` opens and closes the
+# same way, and matching lazily to the last `-->` would swallow the prose
+# between them.
+_COMMENT_ONLY_RE = re.compile(r"\A<!--(?:(?!-->).)*-->\Z", re.DOTALL)
+
+
 # A scheme-qualified URI: `https:`, `mailto:`, `file:` (RFC 3986 §3.1).
 _URI_SCHEME_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*:")
 
@@ -443,6 +450,29 @@ def _render_block(
     ):
         content = first.content.rstrip("\n")
         rendered = f'<div class="mermaid">{html_mod.escape(content)}</div>'
+    elif first.type == "paragraph_open" and _COMMENT_ONLY_RE.match(raw.strip()):
+        # An HTML comment is invisible in every other markdown renderer, and
+        # invisibility is why an author writes one.  The parser runs with
+        # `html: False` (see `_new_parser`), so a comment is not an `html_block`
+        # here — it arrives as a paragraph whose html is the *escaped* comment
+        # text, and Marp decks showed their own `<!-- _class: … -->` directives
+        # as body copy.
+        #
+        # The block itself stays, with its line range and its id: the html is
+        # what is suppressed, not the content.  `id="L{start_line}"` keeps
+        # anchoring comments written about it, and `view_specs` still reads the
+        # directive out of `raw`.
+        #
+        # `paragraph_open` is a structural check, for the reason
+        # `view_specs._is_slide_break` checks `type`: a comment *shown as an
+        # example* is content.  Indented code keeps its indentation in `raw`
+        # but strips to a bare comment, so the text alone cannot tell a real
+        # comment from a document quoting one.
+        #
+        # Scope is a block that is *wholly* a comment.  One sitting mid-sentence
+        # is still escaped, because finding it would mean re-parsing rendered
+        # markup for a `<!--` that a code span may own.
+        rendered = ""
     elif first.type == "front_matter":
         # The plugin renders front matter to nothing.  Show it instead: it is
         # document metadata a reviewer may want to read and comment on, and a

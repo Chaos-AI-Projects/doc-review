@@ -294,6 +294,88 @@ def test_mermaid_content_escaped():
     assert "A--&gt;B" in html or "A-->B" in html
 
 
+# ── HTML comments ────────────────────────────────────────────────────────
+
+
+def _one(source):
+    blocks = render_markdown_blocks(source)
+    assert len(blocks) == 1, blocks
+    return blocks[0]
+
+
+def test_a_comment_only_block_renders_to_nothing():
+    """A Marp directive is an HTML comment on its own line, and the parser runs
+    with ``html: False``, so it used to arrive as a paragraph of escaped text
+    and show on screen as body copy."""
+    assert _one("<!-- _class: centered -->\n")["html"] == ""
+
+
+def test_an_ordinary_comment_renders_to_nothing_too():
+    """Not just directives.  A comment is invisible in every other markdown
+    renderer, which is the whole reason an author writes one."""
+    assert _one("<!-- TODO: revisit this -->\n")["html"] == ""
+
+
+def test_a_multi_line_comment_renders_to_nothing():
+    assert _one("<!-- _class: quote\n_paginate: false -->\n")["html"] == ""
+
+
+def test_a_comment_in_a_crlf_document_renders_to_nothing():
+    """``raw`` is sliced from the *original* source, while markdown-it folds
+    ``\\r\\n`` to ``\\n`` before parsing — so a block that parsed as a paragraph
+    still carries its ``\\r`` here.  Without the ``.strip()`` this is the one
+    real document shape that would go on leaking, and the suite otherwise
+    cannot tell the two spellings apart."""
+    assert _one("<!-- _class: centered -->\r\n")["html"] == ""
+
+
+def test_a_comment_indented_short_of_a_code_block_renders_to_nothing():
+    """Three spaces is still a paragraph; four would be ``code_block``."""
+    assert _one("   <!-- _class: centered -->\n")["html"] == ""
+
+
+def test_a_suppressed_comment_keeps_its_block():
+    """Suppression is on the rendered html alone.  The block keeps its line
+    range and its id, so ``id="L{start_line}"`` still anchors any comment
+    written about it, and ``view_specs.comment_directives`` still has ``raw``
+    to read the directive out of."""
+    block = _one("<!-- _class: centered -->\n")
+    assert block["type"] == "paragraph"
+    assert block["start_line"] == 1 and block["end_line"] == 1
+    assert block["raw"] == "<!-- _class: centered -->"
+    assert block["block_id"]
+
+
+def test_a_comment_with_trailing_prose_is_not_suppressed():
+    """Half the block is text.  Suppressing the block would take it with it."""
+    assert "and some text" in _one("<!-- _class: centered --> and some text\n")["html"]
+
+
+def test_prose_leading_a_comment_is_not_suppressed():
+    assert "some text" in _one("some text <!-- a note -->\n")["html"]
+
+
+def test_two_comments_around_prose_are_not_suppressed():
+    """The block starts with ``<!--`` and ends with ``-->`` and is still mostly
+    prose, so the delimiters alone cannot decide this."""
+    assert "middle" in _one("<!-- a --> middle <!-- b -->\n")["html"]
+
+
+def test_an_indented_code_block_showing_a_comment_is_not_suppressed():
+    """Structural, like ``comment_directives``: a comment *shown as an example*
+    is content.  Indented code keeps its indentation in ``raw`` but strips to a
+    bare comment, so the text alone cannot tell the two apart."""
+    block = _one("    <!-- _class: centered -->\n")
+    assert block["type"] == "code_block"
+    assert "_class" in block["html"]
+
+
+def test_a_fenced_code_block_showing_a_comment_is_not_suppressed():
+    block = _one("```\n<!-- _class: centered -->\n```\n")
+    assert block["type"] == "fence"
+    assert "_class" in block["html"]
+
+
 # ── Content-derived block ids (#465) ─────────────────────────────────────
 
 
