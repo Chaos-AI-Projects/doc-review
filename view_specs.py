@@ -122,27 +122,54 @@ def _is_slide_break(block):
     return block.get("type") == "hr" and set(block.get("raw", "").strip()) == {"-"}
 
 
-def _is_one_comment(raw):
-    """Is *raw* wholly a single HTML comment?
+def _comment_bodies(raw):
+    """The inner text of each HTML comment in *raw*, or ``None`` if *raw* is
+    not wholly a run of comments.
 
-    ``<!-- a --> middle <!-- b -->`` opens and closes like one comment and is
-    two, so an ends-with test reads the prose between them as directive text
-    and ``slide_specs`` drops it off the deck (MS-607).  Requiring the *first*
-    ``-->`` to be the last three characters is what makes it one.  Searching
-    from index 4 also rejects ``<!-->``, where the opener and the closer would
-    otherwise share characters.
+    A run rather than a single comment (MS-608), because markdown-it continues
+    a paragraph lazily: ``<!-- _class: quote -->\\n<!-- paginate: true -->`` is
+    one block, which is how a real Marp deck writes its directives.  Only
+    whitespace may separate them.
 
-    ``renderer._COMMENT_ONLY_RE`` is the same test, spelled
-    ``\\A<!--(?:(?!-->).)*-->\\Z``, where the per-character ``(?!-->)`` does
-    this job.  The two cannot be shared, because this module imports nothing —
-    see the constraints at the top — so ``test_presentation`` asserts on the
-    pair together.  Change one and change the other: if the renderer blanks a
-    block this calls content, a comment shows as body text, and if this drops a
-    block the renderer keeps, the deck loses prose.
+    Each comment closes at its *own* first ``-->``.  Scanning to the last one
+    instead would read ``<!-- a --> middle <!-- b -->`` as a single comment and
+    its prose as directive text, and ``slide_specs`` would drop that prose off
+    the deck (MS-607).  Searching from index 4 also rejects ``<!-->``, where
+    the opener and the closer would otherwise share characters.  Returning
+    ``None`` rather than ``[]`` keeps ``<!---->`` — a real, empty comment —
+    distinct from prose.
+
+    ``renderer._COMMENTS_ONLY_RE`` is the same test, spelled
+    ``\\A<!--(?:(?!-->).)*-->(?:\\s*<!--(?:(?!-->).)*-->)*\\Z``, where the
+    per-character ``(?!-->)`` does this job.  The two cannot be shared, because
+    this module imports nothing — see the constraints at the top — so
+    ``test_presentation`` asserts on the pair together.  Change one and change
+    the other: if the renderer blanks a block this calls content, a comment
+    shows as body text, and if this drops a block the renderer keeps, the deck
+    loses prose.
     """
-    if not raw.startswith("<!--"):
-        return False
-    return raw.find("-->", len("<!--")) == len(raw) - len("-->")
+    bodies = []
+    rest = raw
+    while True:
+        if not rest.startswith("<!--"):
+            return None
+        close = rest.find("-->", len("<!--"))
+        if close < 0:
+            return None
+        bodies.append(rest[len("<!--") : close])
+        rest = rest[close + len("-->") :]
+        if not rest:
+            return bodies
+        # Emptiness is tested *before* stripping, so a trailing newline is
+        # content and not an accepted separator.  The regex spells the same
+        # asymmetry with `\\s*` inside the repeated group and `\\Z` outside it,
+        # and `"<!-- a -->\\n"` is the parity case that holds the two together.
+        rest = rest.lstrip()
+
+
+def _is_all_comments(raw):
+    """Is *raw* wholly a run of HTML comments?  See ``_comment_bodies``."""
+    return _comment_bodies(raw) is not None
 
 
 def comment_directives(block):
@@ -155,8 +182,12 @@ def comment_directives(block):
     directives as visible body text on the slide.
 
     A block counts as a directive block only when it is a ``paragraph``, is
-    entirely one HTML comment, every line inside it reads ``key: value``, and
-    at least one key is a directive this module acts on.  An ordinary comment
+    entirely HTML comment, every line inside those comments reads
+    ``key: value``, and at least one key is a directive this module acts on.
+    The lines are pooled across the run, so a later comment can carry the
+    layout and a single non-directive line anywhere disqualifies the whole
+    block — the same all-or-nothing rule a multi-line comment already had, and
+    for the same reason.  An ordinary comment
     (``<!-- TODO: later -->``) is deliberately left alone: swallowing every
     comment would delete document content on the strength of a guess, and that
     block carries a comment anchor like any other.
@@ -169,10 +200,11 @@ def comment_directives(block):
     if block.get("type") != "paragraph":
         return {}
     raw = (block.get("raw") or "").strip()
-    if not _is_one_comment(raw):
+    bodies = _comment_bodies(raw)
+    if bodies is None:
         return {}
     directives = {}
-    for line in raw[len("<!--") : -len("-->")].split("\n"):
+    for line in "\n".join(bodies).split("\n"):
         line = line.strip()
         if not line:
             continue

@@ -14,10 +14,10 @@ comment-loss incident).
 
 import pytest
 
-from renderer import _COMMENT_ONLY_RE, render_markdown_blocks
+from renderer import _COMMENTS_ONLY_RE, render_markdown_blocks
 from view_specs import (
     PRESENTATION_LAYOUTS,
-    _is_one_comment,
+    _is_all_comments,
     comment_directives,
     front_matter_directives,
     presentation_specs,
@@ -537,6 +537,32 @@ class TestCommentDirectives:
             self._block("<!-- class: quote\n_paginate: false -->\n")
         ) == {"class": "quote", "_paginate": "false"}
 
+    def test_a_run_of_adjacent_directive_comments_is_read_whole(self):
+        """MS-608, the shape a real Marp deck writes.  Two directives on
+        consecutive lines are one paragraph block, because markdown-it
+        continues a paragraph lazily, so both must be read out of the one
+        ``raw``."""
+        assert comment_directives(
+            self._block("<!-- _class: quote -->\n<!-- paginate: true -->\n")
+        ) == {"_class": "quote", "paginate": "true"}
+
+    def test_a_later_comment_in_a_run_can_carry_the_directive(self):
+        """The first comment is not privileged.  Reading only it would leave
+        the block on the slide, showing both comments as escaped text."""
+        assert comment_directives(
+            self._block("<!-- paginate: true -->\n<!-- _class: quote -->\n")
+        ) == {"paginate": "true", "_class": "quote"}
+
+    def test_prose_inside_one_comment_of_a_run_is_not_a_directive(self):
+        """One non-directive line disqualifies the whole block, as it does
+        inside a single multi-line comment — the prose would leave with it."""
+        assert (
+            comment_directives(
+                self._block("<!-- _class: title -->\n<!-- and some prose -->\n")
+            )
+            == {}
+        )
+
     def test_an_ordinary_comment_is_not_a_directive(self):
         """Decided (issue constraint 4): only comments naming a directive we
         act on are swallowed.  Treating every comment as a directive would
@@ -602,18 +628,23 @@ class TestCommentDirectives:
             "<!-- a -->\n",
             "not a comment",
             "<!-- unterminated",
+            "<!-- a -->\n<!-- b -->",
+            "<!-- a --> <!-- b -->",
+            "<!-- a --><!-- b -->",
+            "<!-- a -->\n<!-- b --> and some text",
+            "<!-- a -->\n<!-- unterminated",
         ],
     )
-    def test_the_one_comment_test_matches_the_renderer(self, raw):
+    def test_the_all_comments_test_matches_the_renderer(self, raw):
         """The two modules cannot share the predicate — ``view_specs`` is
         loaded into Pyodide as a bare file and imports nothing — so this test
         is what ties them together.  They must agree about which blocks are
-        wholly one comment, or a block the renderer blanks keeps its prose
-        while presentation mode drops it, or the reverse.
+        wholly comment, or a block the renderer blanks keeps its prose while
+        presentation mode drops it, or the reverse.
 
         The trailing-newline case earns its place: it is the one that tells
         ``\\Z`` from ``$``, which are otherwise interchangeable here."""
-        assert _is_one_comment(raw) == bool(_COMMENT_ONLY_RE.match(raw))
+        assert _is_all_comments(raw) == bool(_COMMENTS_ONLY_RE.match(raw))
 
 
 class TestLayoutScoping:
@@ -747,6 +778,15 @@ class TestDirectiveBlockSuppression:
         assert 3 in rows, "the prose block left the deck"
         assert "MID PROSE" in rows[3]["html"]
         assert slides[0]["layout"] == "default"
+
+    def test_a_run_of_directive_comments_leaves_the_slide(self):
+        """MS-608.  Two directives on consecutive lines are one block, and that
+        block is wholly comment, so it is metadata: it takes its layout and
+        drops off the deck rather than showing as escaped text."""
+        source = "<!-- _class: quote -->\n<!-- paginate: true -->\n\n# A\n"
+        slides = slide_specs(render_markdown_blocks(source))
+        assert [row["startLine"] for row in _rows(slides)] == [4]
+        assert slides[0]["layout"] == "quote"
 
     def test_suppression_does_not_change_review_mode(self, layout_blocks):
         """Review mode keeps a row for every block, directives included — this

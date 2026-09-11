@@ -316,15 +316,29 @@ An opening line.
 Available layouts are `default`, `title`, `centered` and `quote`. An unrecognised name falls back to
 `default`.
 
-A comment block is treated as a directive only when it is entirely one HTML comment, every line
-inside it reads `key: value`, and at least one key is `class` or `_class`. An ordinary
+A comment block is treated as a directive only when it is entirely HTML comment, every line inside
+those comments reads `key: value`, and at least one key is `class` or `_class`. An ordinary
 `<!-- TODO: later -->` is left alone and stays a commentable block. A directive shown as an example
 inside indented or fenced code is content, not a directive.
 
-Neither kind *shows*. A block that is wholly one HTML comment renders to nothing, in review mode as
-much as on a slide, because rendering to nothing is what an author writes a comment for. A comment
-sitting mid-sentence is the exception and is still displayed escaped -- finding it would mean
-re-parsing rendered markup for a `<!--` that a code span may own.
+"Entirely" covers a run of comments, not just one. Markdown continues a paragraph lazily, so two
+directives on consecutive lines with no blank line between them are a single block, which is how a
+Marp deck usually writes them:
+
+```markdown
+<!-- _class: quote -->
+<!-- paginate: true -->
+```
+
+Their lines are pooled, so a later comment in the run can carry the layout. Pooling is also why one
+line of prose anywhere in the run disqualifies the whole block, the same all-or-nothing rule a
+multi-line comment already had.
+
+Neither kind *shows*. A block that is wholly HTML comment renders to nothing, in review mode as much
+as on a slide, because rendering to nothing is what an author writes a comment for. Prose is the
+exception, and it takes the whole block with it: `<!-- a --> middle <!-- b -->` is not wholly
+comment, so it stays on the slide displayed escaped. A comment sitting mid-sentence stays escaped
+too -- finding it would mean re-parsing rendered markup for a `<!--` that a code span may own.
 
 What survives differs by kind. An ordinary comment keeps its row in both modes and loses only its
 *text*, so expect an empty row rather than a missing one, and the row still carries a comment anchor

@@ -361,6 +361,31 @@ def test_two_comments_around_prose_are_not_suppressed():
     assert "middle" in _one("<!-- a --> middle <!-- b -->\n")["html"]
 
 
+def test_a_run_of_adjacent_comments_renders_to_nothing():
+    """MS-608.  Markdown-it continues a paragraph lazily, so two directives on
+    consecutive lines with no blank line between them arrive as *one* block
+    carrying two comments.  Real Marp decks write directives that way, and the
+    block is wholly comment, so none of it should show."""
+    assert _one("<!-- _class: quote -->\n<!-- paginate: true -->\n")["html"] == ""
+
+
+def test_a_run_of_comments_on_one_line_renders_to_nothing():
+    """Whitespace is the only thing allowed between them, and none is
+    whitespace too."""
+    assert _one("<!-- a --> <!-- b -->\n")["html"] == ""
+    assert _one("<!-- a --><!-- b -->\n")["html"] == ""
+
+
+def test_a_run_of_comments_with_trailing_prose_is_not_suppressed():
+    """The run rule must not become an ends-with test: reaching the last
+    ``-->`` says nothing about what follows it."""
+    assert "and some text" in _one("<!-- a -->\n<!-- b --> and some text\n")["html"]
+
+
+def test_an_unterminated_comment_after_a_run_is_not_suppressed():
+    assert "unterminated" in _one("<!-- a -->\n<!-- unterminated\n")["html"]
+
+
 def test_an_indented_code_block_showing_a_comment_is_not_suppressed():
     """Structural, like ``comment_directives``: a comment *shown as an example*
     is content.  Indented code keeps its indentation in ``raw`` but strips to a

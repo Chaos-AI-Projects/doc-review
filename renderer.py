@@ -252,17 +252,24 @@ def _assign_block_ids(blocks: list[dict]) -> list[dict]:
     return blocks
 
 
-# A block that is one HTML comment and nothing else.  `(?!-->)` per character
-# is what makes it *one*: `<!-- a --> middle <!-- b -->` opens and closes the
-# same way, and matching lazily to the last `-->` would swallow the prose
-# between them.
+# A block that is HTML comments and nothing else.  `(?!-->)` per character is
+# what closes each one at its *own* terminator: `<!-- a --> middle <!-- b -->`
+# opens and closes the same way as a run does, and matching lazily to the last
+# `-->` would swallow the prose between them.
 #
-# `view_specs._is_one_comment` is this same test, hand-rolled, because that
+# A run rather than a single comment (MS-608), because markdown-it continues a
+# paragraph lazily: two directives on consecutive lines are one block, which is
+# how a real Marp deck writes them.  Only whitespace may separate them, and the
+# trailing `\Z` binds to the last `-->` with nothing after it, so a run ending
+# in prose is still content.
+#
+# `view_specs._is_all_comments` is this same test, hand-rolled, because that
 # module imports nothing so Pyodide can load it as a bare file.  Change this
 # and change that; `test_presentation` asserts the pair agree.  `\Z` carries
 # weight that `$` would not: `$` also matches before a trailing newline, and
 # the two spellings would part company there.
-_COMMENT_ONLY_RE = re.compile(r"\A<!--(?:(?!-->).)*-->\Z", re.DOTALL)
+_COMMENT = r"<!--(?:(?!-->).)*-->"
+_COMMENTS_ONLY_RE = re.compile(rf"\A{_COMMENT}(?:\s*{_COMMENT})*\Z", re.DOTALL)
 
 
 # A scheme-qualified URI: `https:`, `mailto:`, `file:` (RFC 3986 §3.1).
@@ -456,7 +463,7 @@ def _render_block(
     ):
         content = first.content.rstrip("\n")
         rendered = f'<div class="mermaid">{html_mod.escape(content)}</div>'
-    elif first.type == "paragraph_open" and _COMMENT_ONLY_RE.match(raw.strip()):
+    elif first.type == "paragraph_open" and _COMMENTS_ONLY_RE.match(raw.strip()):
         # An HTML comment is invisible in every other markdown renderer, and
         # invisibility is why an author writes one.  The parser runs with
         # `html: False` (see `_new_parser`), so a comment is not an `html_block`
@@ -475,9 +482,10 @@ def _render_block(
         # but strips to a bare comment, so the text alone cannot tell a real
         # comment from a document quoting one.
         #
-        # Scope is a block that is *wholly* a comment.  One sitting mid-sentence
-        # is still escaped, because finding it would mean re-parsing rendered
-        # markup for a `<!--` that a code span may own.
+        # Scope is a block that is *wholly* comment — one comment or a run of
+        # them.  One sitting mid-sentence is still escaped, because finding it
+        # would mean re-parsing rendered markup for a `<!--` that a code span
+        # may own.
         rendered = ""
     elif first.type == "front_matter":
         # The plugin renders front matter to nothing.  Show it instead: it is
