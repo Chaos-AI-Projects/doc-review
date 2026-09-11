@@ -14,9 +14,10 @@ comment-loss incident).
 
 import pytest
 
-from renderer import render_markdown_blocks
+from renderer import _COMMENT_ONLY_RE, render_markdown_blocks
 from view_specs import (
     PRESENTATION_LAYOUTS,
+    _is_one_comment,
     comment_directives,
     front_matter_directives,
     presentation_specs,
@@ -573,6 +574,47 @@ class TestCommentDirectives:
         assert block["type"] == "fence"
         assert comment_directives(block) == {}
 
+    def test_two_comments_around_prose_are_not_a_directive(self):
+        """MS-607.  ``<!-- a --> prose <!-- b -->`` starts with ``<!--`` and
+        ends with ``-->`` while being two comments, so a bare ends-with test
+        read it as one directive block and ``slide_specs`` dropped the prose
+        off the deck.  Review mode always rendered the same block, so the two
+        modes disagreed about whether the text existed."""
+        assert comment_directives(
+            self._block("<!-- _class: title --> MID PROSE <!-- x: y -->\n")
+        ) == {}
+
+    def test_an_unterminated_comment_is_not_a_directive(self):
+        """``<!-->`` satisfies both a startswith and an endswith test on
+        overlapping characters, and is not a comment at all."""
+        assert comment_directives(self._block("<!-->\n")) == {}
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "<!-- _class: title -->",
+            "<!---->",
+            "<!-->",
+            "<!--->",
+            "<!-- _class: title --> MID PROSE <!-- x: y -->",
+            "<!-- _class: title -->-->",
+            "<!-- a\nb -->",
+            "<!-- a -->\n",
+            "not a comment",
+            "<!-- unterminated",
+        ],
+    )
+    def test_the_one_comment_test_matches_the_renderer(self, raw):
+        """The two modules cannot share the predicate — ``view_specs`` is
+        loaded into Pyodide as a bare file and imports nothing — so this test
+        is what ties them together.  They must agree about which blocks are
+        wholly one comment, or a block the renderer blanks keeps its prose
+        while presentation mode drops it, or the reverse.
+
+        The trailing-newline case earns its place: it is the one that tells
+        ``\\Z`` from ``$``, which are otherwise interchangeable here."""
+        assert _is_one_comment(raw) == bool(_COMMENT_ONLY_RE.match(raw))
+
 
 class TestLayoutScoping:
     def test_every_slide_carries_a_layout(self, layout_blocks):
@@ -690,6 +732,21 @@ class TestDirectiveBlockSuppression:
         slides = slide_specs(render_markdown_blocks(source))
         assert len(slides) == 2
         assert [s["layout"] for s in slides] == ["default", "default"]
+
+    def test_prose_between_two_comments_stays_on_the_slide(self):
+        """MS-607, the loss this guards.  ``<!-- a --> prose <!-- b -->`` is one
+        block that is not one comment, so it is slide content: it keeps its row,
+        its line range and its comment anchor, and it takes no layout from the
+        directive it appears to carry.
+
+        The html stays escaped rather than blank, because the renderer suppresses
+        a block that is *wholly* a comment and this one is not."""
+        source = "# A\n\n<!-- _class: title --> MID PROSE <!-- x: y -->\n"
+        slides = slide_specs(render_markdown_blocks(source))
+        rows = {row["startLine"]: row for row in _rows(slides)}
+        assert 3 in rows, "the prose block left the deck"
+        assert "MID PROSE" in rows[3]["html"]
+        assert slides[0]["layout"] == "default"
 
     def test_suppression_does_not_change_review_mode(self, layout_blocks):
         """Review mode keeps a row for every block, directives included — this

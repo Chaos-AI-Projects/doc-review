@@ -205,7 +205,8 @@ And there is no authentication: every route is open to anything that can reach t
 A markdown file can be presented as a slide deck. The syntax is a subset of
 [Marp](https://marp.app/), and the deck is a grouping of the same blocks review mode renders, so a
 block that reaches the slide keeps its anchor across a mode flip. Front matter, the `---` breaks
-and the layout directives below do not reach it, and have no anchor to keep.
+and the layout directives below do not reach it, so they have no anchor to keep across the flip.
+Each of them still carries one in review mode.
 
 Presentation mode is read-only. The comment UI is unmounted while a deck is on screen.
 
@@ -325,11 +326,10 @@ much as on a slide, because rendering to nothing is what an author writes a comm
 sitting mid-sentence is the exception and is still displayed escaped -- finding it would mean
 re-parsing rendered markup for a `<!--` that a code span may own.
 
-What survives differs by kind, and only the comment's *text* is suppressed in either case. An
-ordinary comment keeps its row in both modes, so expect an empty row rather than a missing one, and
-the row still carries a comment anchor you can write against. A directive block is metadata and is
-dropped from the slide outright, exactly as front matter is, so its anchor exists in review mode
-only.
+What survives differs by kind. An ordinary comment keeps its row in both modes and loses only its
+*text*, so expect an empty row rather than a missing one, and the row still carries a comment anchor
+you can write against. A directive block is metadata and loses more than its text: the slide drops
+the block outright, exactly as it drops front matter, so its anchor exists in review mode only.
 
 ### Presenting
 

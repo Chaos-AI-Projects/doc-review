@@ -256,6 +256,12 @@ def _assign_block_ids(blocks: list[dict]) -> list[dict]:
 # is what makes it *one*: `<!-- a --> middle <!-- b -->` opens and closes the
 # same way, and matching lazily to the last `-->` would swallow the prose
 # between them.
+#
+# `view_specs._is_one_comment` is this same test, hand-rolled, because that
+# module imports nothing so Pyodide can load it as a bare file.  Change this
+# and change that; `test_presentation` asserts the pair agree.  `\Z` carries
+# weight that `$` would not: `$` also matches before a trailing newline, and
+# the two spellings would part company there.
 _COMMENT_ONLY_RE = re.compile(r"\A<!--(?:(?!-->).)*-->\Z", re.DOTALL)
 
 

@@ -122,6 +122,29 @@ def _is_slide_break(block):
     return block.get("type") == "hr" and set(block.get("raw", "").strip()) == {"-"}
 
 
+def _is_one_comment(raw):
+    """Is *raw* wholly a single HTML comment?
+
+    ``<!-- a --> middle <!-- b -->`` opens and closes like one comment and is
+    two, so an ends-with test reads the prose between them as directive text
+    and ``slide_specs`` drops it off the deck (MS-607).  Requiring the *first*
+    ``-->`` to be the last three characters is what makes it one.  Searching
+    from index 4 also rejects ``<!-->``, where the opener and the closer would
+    otherwise share characters.
+
+    ``renderer._COMMENT_ONLY_RE`` is the same test, spelled
+    ``\\A<!--(?:(?!-->).)*-->\\Z``, where the per-character ``(?!-->)`` does
+    this job.  The two cannot be shared, because this module imports nothing —
+    see the constraints at the top — so ``test_presentation`` asserts on the
+    pair together.  Change one and change the other: if the renderer blanks a
+    block this calls content, a comment shows as body text, and if this drops a
+    block the renderer keeps, the deck loses prose.
+    """
+    if not raw.startswith("<!--"):
+        return False
+    return raw.find("-->", len("<!--")) == len(raw) - len("-->")
+
+
 def comment_directives(block):
     """Marp directives carried by *block*, or ``{}`` if it carries none.
 
@@ -146,7 +169,7 @@ def comment_directives(block):
     if block.get("type") != "paragraph":
         return {}
     raw = (block.get("raw") or "").strip()
-    if not (raw.startswith("<!--") and raw.endswith("-->")):
+    if not _is_one_comment(raw):
         return {}
     directives = {}
     for line in raw[len("<!--") : -len("-->")].split("\n"):
