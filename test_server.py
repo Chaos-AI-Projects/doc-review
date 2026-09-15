@@ -8662,3 +8662,210 @@ class TestMermaidWiring:
         )
         assert result.returncode == 0, \
             f"Behavioral mermaid test failed:\n{result.stderr}"
+
+
+class TestProxyIdentityAuthor:
+    """Comment authorship comes from an identity-aware-proxy header (MS-611).
+
+    The trust model is option B, chosen by Chaos on 2026-09-15: the plain
+    header is trusted only when configuration says a proxy sits in front.
+    The app also serves 127.0.0.1:28080 with nothing in front of it, so an
+    unconfigured server must keep ignoring the header -- otherwise any local
+    caller can claim any identity.
+    """
+
+    CF = "Cf-Access-Authenticated-User-Email"
+    IAP = "X-Goog-Authenticated-User-Email"
+
+    @pytest.fixture
+    def trusted_client(self, source_dir):
+        """A client whose server is configured to trust the Cloudflare header."""
+        db_path = Path(source_dir) / "trusted_comments.db"
+        configure(source_dir, db_path, identity_header=self.CF)
+        yield TestClient(app)
+        configure(source_dir, db_path)
+
+    def _fid(self, source_dir):
+        from file_id import derive_file_id
+
+        return derive_file_id(str(Path(source_dir) / "test.md"))
+
+    def _post(self, client, source_dir, body, headers=None, author="anon"):
+        return client.post(
+            "/api/comments",
+            json={
+                "file_id": self._fid(source_dir),
+                "path": "test.md",
+                "line_start": 1,
+                "line_end": 1,
+                "author": author,
+                "body": body,
+            },
+            headers=headers or {},
+        )
+
+    def test_unconfigured_server_ignores_the_header(self, client, source_dir):
+        """The security case: loopback has no proxy, so the header is a lie."""
+        resp = self._post(
+            client, source_dir, "spoof attempt", {self.CF: "attacker@evil.test"}
+        )
+        assert resp.status_code == 201
+        assert resp.json()["author"] == "anon"
+
+    def test_configured_header_becomes_the_author(self, trusted_client, source_dir):
+        resp = self._post(
+            trusted_client, source_dir, "from the web", {self.CF: "chaos@example.com"}
+        )
+        assert resp.status_code == 201
+        assert resp.json()["author"] == "chaos@example.com"
+
+    def test_header_overrides_a_posted_author(self, trusted_client, source_dir):
+        """A signed-in identity outranks a client-supplied author field."""
+        resp = self._post(
+            trusted_client,
+            source_dir,
+            "claims to be someone else",
+            {self.CF: "chaos@example.com"},
+            author="president",
+        )
+        assert resp.json()["author"] == "chaos@example.com"
+
+    def test_absent_header_keeps_the_posted_author(self, trusted_client, source_dir):
+        """This is how the CLI keeps posting as `overlord` over loopback."""
+        resp = self._post(trusted_client, source_dir, "from the CLI", author="overlord")
+        assert resp.json()["author"] == "overlord"
+
+    @pytest.mark.parametrize("value", ["", "   "])
+    def test_blank_header_keeps_the_posted_author(
+        self, trusted_client, source_dir, value
+    ):
+        resp = self._post(
+            trusted_client, source_dir, "blank header", {self.CF: value}, author="overlord"
+        )
+        assert resp.json()["author"] == "overlord"
+
+    def test_only_the_configured_header_is_trusted(self, trusted_client, source_dir):
+        """Configured for Cloudflare, so the IAP header is just another lie."""
+        resp = self._post(
+            trusted_client,
+            source_dir,
+            "wrong proxy",
+            {self.IAP: "attacker@evil.test"},
+            author="overlord",
+        )
+        assert resp.json()["author"] == "overlord"
+
+    def test_iap_subject_prefix_is_stripped(self, source_dir):
+        """IAP sends `accounts.google.com:<email>`, and only the email is the name."""
+        db_path = Path(source_dir) / "iap_comments.db"
+        configure(source_dir, db_path, identity_header=self.IAP)
+        try:
+            client = TestClient(app)
+            resp = self._post(
+                client,
+                source_dir,
+                "via IAP",
+                {self.IAP: "accounts.google.com:chaos@example.com"},
+            )
+            assert resp.json()["author"] == "chaos@example.com"
+        finally:
+            configure(source_dir, db_path)
+
+    def test_header_name_matching_is_case_insensitive(self, trusted_client, source_dir):
+        """HTTP header names are case-insensitive, and proxies vary the casing."""
+        resp = self._post(
+            trusted_client,
+            source_dir,
+            "lowercased header",
+            {self.CF.lower(): "chaos@example.com"},
+        )
+        assert resp.json()["author"] == "chaos@example.com"
+
+    def test_repeated_header_is_not_trusted(self, trusted_client, source_dir):
+        """Two copies means the client sent one, and we cannot tell which.
+
+        A proxy that appends rather than replaces leaves the client's value
+        first, so taking the first occurrence hands the attacker the author.
+        Neither value is worth trusting, so the posted author stands.
+        """
+        resp = self._post(
+            trusted_client,
+            source_dir,
+            "two copies",
+            [(self.CF, "attacker@evil.test"), (self.CF, "chaos@example.com")],
+            author="overlord",
+        )
+        assert resp.json()["author"] == "overlord"
+
+    def test_comma_joined_header_is_not_trusted(self, trusted_client, source_dir):
+        """Duplicate headers also arrive comma-joined, and mean the same thing."""
+        resp = self._post(
+            trusted_client,
+            source_dir,
+            "comma joined",
+            {self.CF: "attacker@evil.test,chaos@example.com"},
+            author="overlord",
+        )
+        assert resp.json()["author"] == "overlord"
+
+    def test_empty_configured_header_name_trusts_nothing(self, source_dir):
+        """`--identity-header ''` names no header, so it must not enable trust."""
+        db_path = Path(source_dir) / "blankname_comments.db"
+        configure(source_dir, db_path, identity_header="")
+        try:
+            client = TestClient(app)
+            resp = self._post(
+                client,
+                source_dir,
+                "blank flag",
+                {self.CF: "attacker@evil.test"},
+                author="overlord",
+            )
+            assert resp.json()["author"] == "overlord"
+        finally:
+            configure(source_dir, db_path)
+
+    def test_form_route_uses_the_header_too(self, trusted_client, source_dir):
+        """The browser posts the form route, so it is the one that matters most."""
+        resp = trusted_client.post(
+            "/comment",
+            data={
+                "file_id": self._fid(source_dir),
+                "path": "test.md",
+                "line_start": "1",
+                "line_end": "1",
+                "author": "anon",
+                "body": "Typed into the web UI",
+                "parent_id": "0",
+            },
+            headers={self.CF: "chaos@example.com"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        listed = trusted_client.get("/api/comments", params={"path": "test.md"}).json()
+        posted = [c for c in listed if c["body"] == "Typed into the web UI"]
+        assert len(posted) == 1
+        assert posted[0]["author"] == "chaos@example.com"
+
+    def test_form_route_unconfigured_ignores_the_header(self, client, source_dir):
+        resp = client.post(
+            "/comment",
+            data={
+                "file_id": self._fid(source_dir),
+                "path": "test.md",
+                "line_start": "1",
+                "line_end": "1",
+                "author": "anon",
+                "body": "Form spoof attempt",
+                "parent_id": "0",
+            },
+            headers={self.CF: "attacker@evil.test"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        listed = client.get("/api/comments", params={"path": "test.md"}).json()
+        posted = [c for c in listed if c["body"] == "Form spoof attempt"]
+        assert len(posted) == 1
+        assert posted[0]["author"] == "anon"

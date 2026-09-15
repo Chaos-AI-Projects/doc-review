@@ -30,9 +30,17 @@ python doc-review/server.py /path/to/docs --host 127.0.0.1 --port 28080
 cd doc-review && pytest -v
 ```
 
-`server.py` takes the directory to serve as its one positional argument, plus `--host`, `--port` and
-`--db`. Give it a single file instead and it serves that file's parent directory. The database
-defaults to `comments.db` in the working directory.
+`server.py` takes the directory to serve as its one positional argument, plus `--host`, `--port`,
+`--db` and `--identity-header`. Give it a single file instead and it serves that file's parent
+directory. The database defaults to `comments.db` in the working directory.
+
+`--identity-header` names the request header an identity-aware proxy sets to the signed-in user's
+address, and a comment arriving with that header is attributed to that address instead of `anon`.
+Naming the header is what makes it trusted, so set the flag only when a proxy really does sit in
+front and strips a client-supplied copy. Behind Cloudflare Access the header is
+`Cf-Access-Authenticated-User-Email`; behind GCP IAP it is `X-Goog-Authenticated-User-Email`, whose
+`accounts.google.com:` subject prefix is stripped. Left unset, the header is ignored, which is what
+keeps a direct loopback caller from claiming any identity it likes.
 
 **Everything under the served directory is readable, not just the markdown.** A path that climbs
 out of the root is refused with a 403, but inside it there is no extension filter on the read path:

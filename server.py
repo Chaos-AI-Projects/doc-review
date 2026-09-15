@@ -89,16 +89,60 @@ async def add_static_cache_control(request: Request, call_next):
 # Globals set by configure()
 _db_path: str = "comments.db"
 _source_root: Path = Path(".")
+_identity_header: str | None = None
+
+# GCP IAP sends `accounts.google.com:<email>`; Cloudflare Access sends a bare
+# address.  Only the address is a name a reader recognises.
+_IAP_SUBJECT_PREFIX = "accounts.google.com:"
 
 
-def configure(source_root: str | Path, db_path: str | Path = "comments.db") -> None:
-    """Set the source root and DB path.  Called before the server starts."""
-    global _db_path, _source_root
+def configure(
+    source_root: str | Path,
+    db_path: str | Path = "comments.db",
+    identity_header: str | None = None,
+) -> None:
+    """Set the source root, DB path and trusted identity header.
+
+    ``identity_header`` names the request header an identity-aware proxy sets
+    to the signed-in user's address, and naming it is what makes it trusted.
+    It defaults to ``None`` because the server also listens on 127.0.0.1 with
+    nothing in front of it, where such a header is client-supplied and any
+    local caller could claim any identity (MS-611).
+    """
+    global _db_path, _source_root, _identity_header
     _source_root = Path(source_root).resolve()
     _db_path = str(db_path)
+    _identity_header = identity_header
     conn = get_connection(_db_path)
     init_db(conn)
     conn.close()
+
+
+def _author_from_request(request: Request, posted: str) -> str:
+    """Return the proxy-asserted author, falling back to *posted*.
+
+    The header outranks the posted field, because a signed-in identity is
+    worth more than a value the client chose.  It only outranks it when the
+    server was configured with a proxy in front, and only when the proxy
+    actually set it -- an absent header is how the CLI keeps posting over
+    loopback under its own name.
+
+    A header that arrives more than once is refused rather than resolved.
+    Proxies vary on whether they replace a client-supplied copy or append to
+    it, so with two values in hand the first one may be the attacker's.  An
+    ambiguous chain asserts no identity at all.
+    """
+    if not _identity_header:
+        return posted
+    values = request.headers.getlist(_identity_header)
+    if len(values) != 1:
+        return posted
+    value = values[0].strip()
+    if not value or "," in value:
+        return posted
+    if value.startswith(_IAP_SUBJECT_PREFIX):
+        value = value[len(_IAP_SUBJECT_PREFIX):].strip()
+    return value or posted
 
 
 def _conn():
@@ -1056,6 +1100,7 @@ async def api_source(path: str = Query(...)):
 
 @app.post("/comment")
 async def add_comment(
+    request: Request,
     file_id: str = Form(...),
     path: str = Form(...),
     line_start: int = Form(...),
@@ -1076,7 +1121,7 @@ async def add_comment(
             file_id=file_id,
             line_start=line_start,
             line_end=line_end,
-            author=author,
+            author=_author_from_request(request, author),
             body=body,
             parent_id=_parent_for_new_comment(
                 conn, explicit=parent_id, block_id=block_id, path=path, target=target
@@ -1161,7 +1206,7 @@ class _CommentCreate(BaseModel):
 
 
 @app.post("/api/comments", status_code=201)
-async def api_post_comment(payload: _CommentCreate):
+async def api_post_comment(payload: _CommentCreate, request: Request):
     """Create a comment from a JSON body, return the created comment as JSON."""
     target = _resolve_file(payload.path)
     block_id, block_offset, block_context = _block_anchor_for_new_comment(
@@ -1174,7 +1219,7 @@ async def api_post_comment(payload: _CommentCreate):
             file_id=payload.file_id,
             line_start=payload.line_start,
             line_end=payload.line_end,
-            author=payload.author,
+            author=_author_from_request(request, payload.author),
             body=payload.body,
             parent_id=_parent_for_new_comment(
                 conn,
@@ -1347,6 +1392,19 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=28080)
     parser.add_argument("--db", default="comments.db", help="SQLite DB path")
+    parser.add_argument(
+        "--identity-header",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Header an identity-aware proxy sets to the signed-in user's "
+            "address, used as the comment author "
+            "(Cf-Access-Authenticated-User-Email for Cloudflare Access, "
+            "X-Goog-Authenticated-User-Email for GCP IAP). Off by default: "
+            "set it only when a proxy really is in front, because the header "
+            "is client-supplied otherwise."
+        ),
+    )
     args = parser.parse_args()
 
     source = Path(args.source).resolve()
@@ -1355,9 +1413,9 @@ def main():
 
     # If a single file is given, serve its parent directory.
     if source.is_file():
-        configure(source.parent, args.db)
+        configure(source.parent, args.db, args.identity_header)
     else:
-        configure(source, args.db)
+        configure(source, args.db, args.identity_header)
 
     import uvicorn
     uvicorn.run(app, host=args.host, port=args.port)
