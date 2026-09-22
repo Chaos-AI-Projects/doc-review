@@ -182,6 +182,28 @@ function specs(overrides) {
         "Exit presentation");
 })();
 
+// 5b. A caller that cannot carry out an action does not get a button for it.
+//     The standalone page has nothing behind the deck to exit to, and a dead
+//     control on a phone reads as a page that has stopped responding.  The
+//     caller names the actions; the glyph and the label stay here, so the two
+//     pages cannot label the same action differently.
+(function () {
+    var deck = deckDom.buildDeck(fakeDocument, specs(), null, ["next", "prev"]);
+    var actions = deck.querySelector("div.presentation-controls")
+        .querySelectorAll("button").map(function (b) {
+            return b.getAttribute("data-action");
+        });
+    assertDeep("subset: only the named actions are built, in the builder's order",
+        actions, ["prev", "next"]);
+    var unknown = deckDom.buildDeck(fakeDocument, specs(), null, ["next", "zoom"]);
+    assertDeep("subset: an action with no definition here is dropped",
+        unknown.querySelector("div.presentation-controls")
+            .querySelectorAll("button").map(function (b) {
+                return b.getAttribute("data-action");
+            }),
+        ["next"]);
+})();
+
 // 6. A control press dispatches its action and goes no further.  There is
 //    deliberately no whole-slide click-to-advance (#455), so the press must
 //    not bubble into one.

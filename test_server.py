@@ -1,5 +1,6 @@
 """Route-level tests for the doc-review FastAPI server."""
 
+import json
 import os
 import re
 import subprocess
@@ -10,7 +11,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 import view_specs
+from renderer import render_markdown_blocks
 from server import app, configure
+from view_specs import presentation_specs
 
 
 @pytest.fixture
@@ -2131,6 +2134,179 @@ class TestSpaClientNavigation:
             "app.js no longer reads the name deck_dom.js exports"
         )
 
+    def test_standalone_page_is_served(self, client):
+        resp = client.get("/static/standalone.html")
+        assert resp.status_code == 200
+
+    def test_standalone_page_loads_its_modules_first(self, client):
+        """nav_logic and deck_dom must be in scope before standalone.js runs.
+
+        The page hands both to createDeckApp() as `window.docReviewNavLogic`
+        and `window.docReviewDeck`, so a dropped or reordered tag costs a
+        TypeError that appears only after the Pyodide boot -- minutes into a
+        talk, on a page with no server-side fallback (MS-619).
+
+        The `src` attribute, not the bare filename: the page's header comment
+        names standalone.js several lines above the first script tag, so a
+        substring search finds the prose and compares comment positions."""
+        html = client.get("/static/standalone.html").text
+        entry = html.index('src="standalone.js"')
+        for dep in ("nav_logic.js", "deck_dom.js"):
+            assert html.index(f'src="{dep}"') < entry, (
+                f"standalone.html loads {dep} after standalone.js"
+            )
+
+    def test_standalone_page_reads_python_as_plain_files(self, client):
+        """The published copy has no /spike or /py route to reach.
+
+        Those two routes wrap the module source in JSON, and this page runs
+        from ChaosEternal.github.io where neither exists.  Reaching for them
+        would work in every local check, because the review app serves them,
+        and fail only once published -- the one place nobody is watching a
+        console (MS-619 slice 3).
+
+        The route PREFIXES, not the two exact paths the page happens to name
+        today: pinning "/spike/renderer.py" and "/py/view_specs.py" left the
+        markdown url unguarded, so pointing it at "/py/talk.md" reintroduced
+        the route this item forbids with the whole suite green."""
+        html = client.get("/static/standalone.html").text
+        assert 'data-renderer-url="renderer.py"' in html
+        assert 'data-view-specs-url="view_specs.py"' in html
+        assert "/spike/" not in html
+        assert "/py/" not in html
+        markdown_url = re.search(r'data-markdown-url="([^"]*)"', html).group(1)
+        assert markdown_url and "/" not in markdown_url, (
+            f"standalone.html points its markdown at {markdown_url!r}, which is "
+            "not a file sitting next to the published page"
+        )
+
+    def test_standalone_page_defines_the_elements_the_boot_looks_up(self, client):
+        """The two ids are a contract between the page and bootPage().
+
+        bootPage() in standalone.js does the getElementById, so the keyboard,
+        the ?talk= filter, the dataset urls and the text fetch are all driven
+        by test_standalone.js cases 12-15 rather than pinned by substring
+        assertions here.  What Node cannot see is the markup those lookups
+        land on: rename an id on either side and the page throws on load with
+        the whole suite green.
+
+        The ids are READ OUT of standalone.js rather than repeated, so this
+        compares the two files instead of asserting one spelling twice."""
+        js = client.get("/static/standalone.js").text
+        ids = dict(re.findall(r'var (MOUNT_ID|STATUS_ID) = "([^"]+)";', js))
+        assert set(ids) == {"MOUNT_ID", "STATUS_ID"}, (
+            "standalone.js no longer names the element ids bootPage looks up"
+        )
+        html = client.get("/static/standalone.html").text
+        for name, value in ids.items():
+            assert f'id="{value}"' in html, (
+                f"standalone.js looks up {name}={value!r}, "
+                "which standalone.html does not define"
+            )
+
+    def test_standalone_exports_under_the_browser_name(self, client):
+        """The browser entry point is the export name, and the page reads it.
+
+        test_standalone.js enters through `module.exports`, so the
+        `root.docReviewStandalone` line is covered only by its own vm case.
+        Rename that property and the published page throws on load with the
+        suite green."""
+        assert "root.docReviewStandalone = api;" in client.get(
+            "/static/standalone.js"
+        ).text, "standalone.js no longer exports under the name the page reads"
+        assert "window.docReviewStandalone" in client.get(
+            "/static/standalone.html"
+        ).text, "standalone.html no longer reads the name standalone.js exports"
+
+    def test_standalone_offers_no_dead_exit_control(self, client):
+        """The published page builds only the controls it can honour.
+
+        Nothing sits behind the deck, so there is nothing to exit to, and a
+        control that does nothing is worse on a phone than no control: the
+        buttons are the only evidence the viewer has, and a dead one reads as a
+        frozen page.  The behaviour is asserted in test_standalone.js; this
+        pins the call, which is the line a refactor drops back to the
+        three-button default."""
+        js = client.get("/static/standalone.js").text
+        assert "DECK_ACTIONS" in js, (
+            "standalone.js no longer names the actions it builds controls for"
+        )
+        assert "DECK_ACTIONS)" in js, (
+            "standalone.js no longer passes its action list to buildDeck"
+        )
+
+    def test_standalone_page_can_fetch_every_resource_it_names(self, client):
+        """Every url the page asks for resolves here, as the raw file.
+
+        The page fetches its three resources RELATIVE to itself, so under the
+        review app they are /static/*.  Two of them are the real modules one
+        directory up, and until they were served at those paths, opening the
+        page gave "Could not load the presentation: 404 renderer.py" -- so the
+        Pyodide half had never executed anywhere, and nobody could look at it
+        before slice 3 published it.
+
+        Plain text, not the /py and /spike JSON wrapper: the published page has
+        neither route, and a boot that learned the wrapper passes every local
+        check and fails only once published.  The urls are read out of the
+        page, so adding a fourth resource without serving it fails here."""
+        html = client.get("/static/standalone.html").text
+        urls = re.findall(r'data-[a-z-]+-url="([^"]*)"', html)
+        assert len(urls) == 3, "standalone.html no longer names its three resources"
+        for url in urls:
+            resp = client.get(f"/static/{url}")
+            assert resp.status_code == 200, f"the page's {url!r} is not served"
+            assert not resp.text.lstrip().startswith("{"), (
+                f"{url!r} is served wrapped, not as the raw file the page reads"
+            )
+        assert client.get("/static/renderer.py").text == (
+            Path(__file__).parent / "renderer.py"
+        ).read_text(encoding="utf-8"), (
+            "the page is served a copy of renderer.py rather than the module "
+            "the server itself imports, so a slide can render two ways"
+        )
+
+    def test_standalone_sample_talk_presents_through_the_real_modules(self, client):
+        """The default talk is a real deck, proven by the code that renders it.
+
+        This is the closest slice 2 can get to a live boot.  The Pyodide half
+        -- the CDN import, micropip, FS.writeFile -- needs a browser, and no
+        browser runs in CI or in the container this is developed in, so the
+        first execution of it is slice 3 on ChaosEternal.github.io.  What can
+        be proven here is everything INSIDE that runtime: the two modules are
+        real, the function names the inline snippets import exist, the JSON
+        round trip survives both calls, and the sample markdown actually
+        declares itself presentable.
+
+        Without this the sample could ship with broken front matter and the
+        only signal would be a viewer reading "Nothing to present" on a page
+        nobody could re-run."""
+        source = client.get("/static/talk.md").text
+
+        # The same two calls the page's createRuntime makes, through the same
+        # json.dumps -- plain dicts on the Python side either way.
+        blocks = json.loads(json.dumps(render_markdown_blocks(source, None)))
+        specs = json.loads(json.dumps(presentation_specs(blocks, {}, source)))
+
+        assert specs["available"], (
+            "static/talk.md does not declare itself presentable, so the "
+            "published page shows the unavailable message instead of a deck"
+        )
+        assert len(specs["slides"]) > 1, "the sample talk is a single slide"
+        assert all(s["rows"] for s in specs["slides"]), "a sample slide is empty"
+
+    def test_standalone_behavioral(self):
+        """Run the Node.js behavioral test against the shipped standalone.js.
+
+        Without this wrapper the boot path's only behavioural coverage runs
+        when somebody types `node test_standalone.js` by hand, which is not
+        coverage (MS-619)."""
+        result = subprocess.run(
+            ["node", str(Path(__file__).parent / "test_standalone.js")],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, \
+            f"Behavioral standalone boot test failed:\n{result.stderr}"
+
     def test_app_js_uses_shared_nav_logic(self, client):
         """app.js must consume the tested module rather than re-implement it."""
         js = self._app_js(client)
@@ -3608,7 +3784,10 @@ class TestPresentationRoundTwo:
         js = self._deck_js(marp_client)
         build = js[js.index("function buildDeck("):]
         build = build[: build.index("\n    var api = {")]
-        assert "buildControls(doc, onAction)" in build
+        # The bar goes INTO the deck element, which is the whole invariant.
+        # Which controls it holds is the caller's to say (MS-619), so this does
+        # not spell the argument list.
+        assert "deck.appendChild(buildControls(" in build
 
     # ── 3. Metadata-gated availability ──
 

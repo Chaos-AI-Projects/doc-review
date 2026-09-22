@@ -17,7 +17,12 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -48,6 +53,40 @@ from view_specs import header_fields, source_row_specs, toc_item_specs
 BASE_DIR = Path(__file__).resolve().parent
 
 app = FastAPI(title="doc-review")
+
+
+# ── The standalone presentation page's Python modules (MS-619) ──────────
+#
+# static/standalone.html fetches `renderer.py` and `view_specs.py` as plain
+# text RELATIVE to itself, because on ChaosEternal.github.io that is all there
+# is: files beside the page, no application behind them.  Serving the real
+# modules at those same relative paths lets the page boot under the review app
+# too, so the Pyodide half can be looked at before it is published.
+#
+# The real modules, not copies under static/: a second copy of either would let
+# a slide render one way in review and another way on stage, which is the drift
+# view_specs.py exists to prevent.
+#
+# And deliberately NOT the /spike and /py routes, which wrap the source in
+# JSON.  A published page has neither, so a boot that learned the wrapper works
+# in every local check and fails only once published.
+#
+# Registered BEFORE the mount below, which matches every /static path and would
+# otherwise answer 404 for these two.
+def _standalone_module_source(name: str) -> PlainTextResponse:
+    return PlainTextResponse((BASE_DIR / name).read_text(encoding="utf-8"))
+
+
+@app.get("/static/renderer.py")
+async def standalone_renderer_source():
+    return _standalone_module_source("renderer.py")
+
+
+@app.get("/static/view_specs.py")
+async def standalone_view_specs_source():
+    return _standalone_module_source("view_specs.py")
+
+
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 

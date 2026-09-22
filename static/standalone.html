@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<!--
+  doc-review — standalone presentation page (MS-619 slice 2).
+
+  A deck with no server behind it.  Slice 3 copies this file, the three scripts
+  it loads, renderer.py, view_specs.py and a style.css subset into
+  ChaosEternal/ChaosEternal.github.io as slides/, so every url below is
+  RELATIVE to this file and every resource is fetched as plain text.  The review
+  app reads the same two Python modules through /spike and /py, which wrap them
+  in JSON; a published page has neither route.
+
+  Only the CDN import and Pyodide's own configuration live here, mirroring
+  templates/view.html.  Everything testable is in static/standalone.js, which
+  runs under Node.
+
+  The deck markdown defaults to talk.md next to this page and ?talk=<file>
+  picks another, so one page can serve several talks.  Diagrams are out of
+  scope for now: a `mermaid` block renders as its escaped source rather than a
+  drawing, the same fallback view.html shows when the mermaid CDN is unreachable.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Presentation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="standalone-presentation">
+
+<!-- The only chrome on the page.  Pyodide boots from a CDN, which on
+     conference wifi is slow often enough that a blank screen would read as
+     broken, so the element carries the state as TEXT.  data-state rides along
+     for the tests and for the styling slice 3 chooses; style.css has no rule
+     for this page's own chrome yet. -->
+<div id="deck-status" class="standalone-status" data-state="loading">Loading the renderer…</div>
+
+<div id="deck-mount" class="standalone-mount"
+     data-renderer-url="renderer.py"
+     data-view-specs-url="view_specs.py"
+     data-markdown-url="talk.md"></div>
+
+<script src="nav_logic.js"></script>
+<script src="deck_dom.js"></script>
+<script src="standalone.js"></script>
+<script type="module">
+// The Pyodide half, and nothing else.  It is kept out of standalone.js so that
+// module needs no network and Node can drive the whole load path; everything
+// this script used to do inline -- the elements, the keyboard, ?talk=, the
+// dataset urls, the text fetch -- is bootPage() over there, under test.
+// Same runtime and same two packages as templates/view.html, so a slide cannot
+// render differently in the two places.
+const createRuntime = async (sources) => {
+    const pyodideModule = await import('https://cdn.jsdelivr.net/pyodide/v0.27.7/full/pyodide.mjs');
+    const pyodide = await pyodideModule.loadPyodide({
+        indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.27.7/full/',
+    });
+    await pyodide.loadPackage('micropip');
+    const micropip = pyodide.pyimport('micropip');
+    // mdit-py-plugins supplies the front_matter rule renderer.py needs, and
+    // front matter is what declares a document presentable at all.
+    await micropip.install(['markdown-it-py', 'mdit-py-plugins']);
+
+    pyodide.FS.writeFile('/home/pyodide/renderer.py', sources.renderer);
+    pyodide.FS.writeFile('/home/pyodide/view_specs.py', sources.viewSpecs);
+    pyodide.runPython(
+        "import sys; sys.path.insert(0, '/home/pyodide');"
+        + " from renderer import render_markdown_blocks;"
+        + " from view_specs import presentation_specs"
+    );
+
+    // JSON in and out keeps plain dicts on the Python side, so the builders
+    // behave identically here and under CPython.  The Python snippets are
+    // fixed literals, never built from a variable, so there is no eval seam.
+    return {
+        renderBlocks: (source) => {
+            pyodide.globals.set('_source', source);
+            // No doc path: links resolve against the page, which on Pages is
+            // where the talk lives anyway.
+            pyodide.globals.set('_doc_path', null);
+            return JSON.parse(pyodide.runPython(
+                "import json; json.dumps(render_markdown_blocks(_source, _doc_path))"
+            ));
+        },
+        presentationSpecs: (blocks, commentsByBlock, source) => {
+            pyodide.globals.set('_spec_arg', JSON.stringify([blocks, commentsByBlock, source]));
+            return JSON.parse(pyodide.runPython(
+                "import json; json.dumps(presentation_specs(*json.loads(_spec_arg)))"
+            ));
+        },
+    };
+};
+
+window.docReviewStandalone.bootPage({
+    doc: document,
+    deckDom: window.docReviewDeck,
+    navLogic: window.docReviewNavLogic,
+    fetch: window.fetch.bind(window),
+    search: window.location.search,
+    createRuntime: createRuntime,
+});
+</script>
+</body>
+</html>

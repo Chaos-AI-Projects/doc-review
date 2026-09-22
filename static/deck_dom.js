@@ -32,6 +32,24 @@
         { action: "exit", glyph: "\u2715", label: "Exit presentation" },
     ];
 
+    /* Which of them a given caller gets, because the two callers can do
+     * different things (MS-619).  The review app can exit, back into the
+     * review DOM the deck covers.  The standalone page has nothing behind the
+     * deck and cannot, and a button that does nothing is worse there than no
+     * button: the control bar is the only evidence a phone viewer has that the
+     * page is alive.
+     *
+     * The CALLER names its actions and this file keeps the glyph and the
+     * label, so "next" cannot be a chevron on one page and an arrow on the
+     * other.  An action with no definition here is dropped rather than guessed
+     * at, the way nav_logic treats a key it does not know. */
+    function controlsFor(actions) {
+        if (!actions) return PRESENTATION_CONTROLS;
+        return PRESENTATION_CONTROLS.filter(function (def) {
+            return actions.indexOf(def.action) !== -1;
+        });
+    }
+
     /* app.js sets the same two attributes on its review rows and keeps its own
      * copy of this.  Deliberate: sharing it would make deck_dom.js a hard
      * dependency of the review render, where today a missing module costs only
@@ -49,11 +67,12 @@
      * stops here rather than bubbling: there is deliberately no whole-slide
      * click-to-advance, because a tap anywhere would make an overflowing slide
      * impossible to scroll and text impossible to select on a phone. */
-    function buildControls(doc, onAction) {
+    function buildControls(doc, onAction, actions) {
+        var defs = controlsFor(actions);
         var bar = doc.createElement("div");
         bar.className = "presentation-controls";
-        for (var i = 0; i < PRESENTATION_CONTROLS.length; i++) {
-            var def = PRESENTATION_CONTROLS[i];
+        for (var i = 0; i < defs.length; i++) {
+            var def = defs[i];
             var btn = doc.createElement("button");
             btn.type = "button";
             btn.className = "presentation-control control-" + def.action;
@@ -76,8 +95,9 @@
 
     /* Build the deck element for `specs`.  `onAction` receives the action
      * string of a pressed control and may be omitted, which renders a deck
-     * whose controls do nothing — useful before navigation is wired. */
-    function buildDeck(doc, specs, onAction) {
+     * whose controls do nothing — useful before navigation is wired.
+     * `actions` names the controls to build; omitting it builds all of them. */
+    function buildDeck(doc, specs, onAction, actions) {
         var deck = doc.createElement("div");
         deck.className = "presentation theme-" + specs.theme;
         deck.tabIndex = -1;  // focusable, so the keys reach the deck
@@ -109,7 +129,7 @@
         }
         // Part of the deck DOM, so they leave with it on exit — presenting
         // stays read-only and no stray chrome survives over the review view.
-        deck.appendChild(buildControls(doc, onAction));
+        deck.appendChild(buildControls(doc, onAction, actions));
         return deck;
     }
 
