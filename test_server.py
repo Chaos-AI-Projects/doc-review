@@ -2089,6 +2089,48 @@ class TestSpaClientNavigation:
         html = client.get("/view?path=test.md").text
         assert re.search(r"/static/nav_logic\.js\?v=[0-9a-f]{8}", html)
 
+    def test_deck_dom_asset_is_served(self, client):
+        resp = client.get("/static/deck_dom.js")
+        assert resp.status_code == 200
+
+    def test_view_loads_deck_dom_before_app_js(self, client):
+        """The deck builder must be in scope when app.js runs (MS-619).
+
+        app.js reads `window.docReviewDeck` once, at the top of its IIFE, and
+        gates the Present button on it.  Drop this script tag or move it after
+        app.js and nothing throws: the gate simply never opens, the button
+        stays hidden and presentation mode disappears with the suite green.
+        That silent shape is why the tag is asserted rather than trusted."""
+        html = client.get("/view?path=test.md").text
+        assert "/static/deck_dom.js" in html
+        assert html.index("/static/deck_dom.js") < html.index("/static/app.js")
+
+    def test_deck_dom_is_versioned(self, client):
+        """Cache busting applies to the new asset too (#442)."""
+        import re
+
+        html = client.get("/view?path=test.md").text
+        assert re.search(r"/static/deck_dom\.js\?v=[0-9a-f]{8}", html)
+
+    def test_deck_dom_exports_under_the_browser_name(self, client):
+        """The browser entry point is the export name, and only app.js reads it.
+
+        test_deck_dom.js enters through `module.exports`, so it never executes
+        the `root.docReviewDeck` line at all.  Rename that property and
+        `window.docReviewDeck` is undefined, the gate in app.js never opens,
+        the Present button stays hidden and nothing throws (MS-619).
+
+        Both halves of the name, because either one alone moves silently.  A
+        bare `"docReviewDeck" in js` is not enough: the module's own header
+        comment says the word, so even deleting the assignment leaves that
+        substring behind, and `docReviewDeckBuilder` matches it too."""
+        assert "root.docReviewDeck = api;" in client.get(
+            "/static/deck_dom.js"
+        ).text, "deck_dom.js no longer exports under the name app.js reads"
+        assert "= window.docReviewDeck;" in self._app_js(client), (
+            "app.js no longer reads the name deck_dom.js exports"
+        )
+
     def test_app_js_uses_shared_nav_logic(self, client):
         """app.js must consume the tested module rather than re-implement it."""
         js = self._app_js(client)
@@ -2191,6 +2233,19 @@ class TestSpaClientNavigation:
         )
         assert result.returncode == 0, \
             f"Behavioral SPA navigation test failed:\n{result.stderr}"
+
+    def test_deck_dom_behavioral(self):
+        """Run the Node.js behavioral test against the shipped deck_dom.js.
+
+        Without this wrapper the deck builder's only behavioural coverage runs
+        only when somebody types `node test_deck_dom.js` by hand, which is not
+        coverage (MS-619)."""
+        result = subprocess.run(
+            ["node", str(Path(__file__).parent / "test_deck_dom.js")],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, \
+            f"Behavioral deck DOM test failed:\n{result.stderr}"
 
 
 class TestSpecBuilderParity:
@@ -2446,6 +2501,14 @@ class TestPresentationRoundTwo:
     @staticmethod
     def _app_js(client):
         return client.get("/static/app.js").text
+
+    @staticmethod
+    def _deck_js(client):
+        """The deck builder moved out of app.js into its own module (MS-619),
+        so the standalone presentation page on ChaosEternal.github.io can build
+        the same deck without the review app around it.  These assertions
+        follow the code; left on app.js they would pass vacuously."""
+        return client.get("/static/deck_dom.js").text
 
     @staticmethod
     def _css(client):
@@ -2994,7 +3057,7 @@ class TestPresentationRoundTwo:
 
     def test_the_deck_carries_prev_next_and_exit_controls(self, marp_client):
         """A phone has no arrow keys and no Esc."""
-        js = self._app_js(marp_client)
+        js = self._deck_js(marp_client)
         controls = js[js.index("var PRESENTATION_CONTROLS = ["):]
         controls = controls[: controls.index("];")]
         for action in ("prev", "next", "exit"):
@@ -3007,13 +3070,29 @@ class TestPresentationRoundTwo:
         js = self._app_js(marp_client)
         assert "presentationControlAction" in js, "controls bypass nav_logic"
         assert "function applyPresentationAction(" in js, "no single dispatcher"
+        # The press itself is raised in deck_dom.js, which knows nothing about
+        # navigation and hands the action string back to its caller.  Check
+        # that half where it lives, or the pointer route below is wired to a
+        # callback nothing ever calls (MS-619).
+        assert "onAction(this.getAttribute(\"data-action\"))" in self._deck_js(
+            marp_client
+        ), "the controls no longer hand their action back to the app"
+        # And the other half of the seam: app.js must actually PASS the
+        # callback.  Drop the 3rd argument at the call site and deck_dom.js
+        # takes the `if (onAction)` branch instead, so prev/next/exit render
+        # as dead buttons and presentation mode is unescapable on a phone —
+        # with every test above still green, because each half is honest
+        # about itself and only the join is wrong.
+        assert "deckDom.buildDeck(document, specs, onControlAction)" in js, (
+            "app.js builds the deck without a control callback"
+        )
         # Per route, not a tally: a count cannot say WHICH route dropped out,
         # and a route that keeps asking nav_logic but then dispatches inline —
         # the second navigation path this test exists to prevent — leaves the
         # count looking merely smaller.
         routes = (
             ("the pointer", self._between(
-                js, "function onControlClick(", "\n    }")),
+                js, "function onControlAction(", "\n    }")),
             ("the keyboard", self._listener(js, "keydown")),
             ("the browser's own fullscreen exit", self._between(
                 js, "function onFullscreenChange(", "\n    }")),
@@ -3423,7 +3502,9 @@ class TestPresentationRoundTwo:
         """Explicitly rejected: a tap anywhere would make an overflowing slide
         impossible to scroll and text impossible to select on a phone, and it
         would fight the explicit buttons that were asked for."""
-        js = self._app_js(marp_client)
+        # Both halves: the deck is built in deck_dom.js and mounted by app.js,
+        # so a whole-slide listener could be added on either side (MS-619).
+        js = self._app_js(marp_client) + "\n" + self._deck_js(marp_client)
         # Quote-agnostic: a single-quoted listener would otherwise slip past.
         for target in ("deck", "deckEl", "section", "bar"):
             found = re.search(
@@ -3431,7 +3512,14 @@ class TestPresentationRoundTwo:
             )
             assert not found, f"{target} advances the deck on any tap"
         # The only click listener in the deck belongs to the controls.
-        assert 'btn.addEventListener("click", onControlClick)' in js
+        listeners = re.findall(
+            r"""(\w+)\.addEventListener\(\s*["']click["']""",
+            self._deck_js(marp_client),
+        )
+        assert listeners == ["btn"], (
+            "the deck carries click listeners other than the controls': %s"
+            % listeners
+        )
 
     def test_the_controls_do_not_swallow_slide_content(self, marp_client):
         """They overlay the slide; the slide stays scrollable and selectable."""
@@ -3517,10 +3605,10 @@ class TestPresentationRoundTwo:
         """Presentation mode stays read-only: the controls are deck DOM, so
         exiting removes them along with the slides — no stray chrome over the
         review view."""
-        js = self._app_js(marp_client)
+        js = self._deck_js(marp_client)
         build = js[js.index("function buildDeck("):]
-        build = build[: build.index("\n    function showSlide")]
-        assert "buildControls()" in build
+        build = build[: build.index("\n    var api = {")]
+        assert "buildControls(doc, onAction)" in build
 
     # ── 3. Metadata-gated availability ──
 
@@ -3578,7 +3666,9 @@ class TestPerSlideLayouts:
 
     @staticmethod
     def _build_deck(client):
-        js = client.get("/static/app.js").text
+        # static/deck_dom.js since MS-619: the builder is shared with the
+        # standalone presentation page, so app.js no longer holds a copy.
+        js = client.get("/static/deck_dom.js").text
         js = re.sub(r"//.*$", "", js, flags=re.M)
         start = js.index("function buildDeck(")
         return js[start : js.index("\n    }", start)]
@@ -3604,8 +3694,16 @@ class TestPerSlideLayouts:
         one.  So `slide.layout` is *read* exactly once — straight onto the
         class — and never inspected.  The bare-token match skips
         `.view-layout` and the `"slide layout-"` prefix, both hyphenated, so a
-        branch on the value has nowhere to hide."""
-        js = re.sub(r"//.*$", "", marp_client.get("/static/app.js").text, flags=re.M)
+        branch on the value has nowhere to hide.
+
+        Counted over both JS files the browser receives.  The builder moved to
+        deck_dom.js in MS-619, and a count scoped to one file would let the
+        other grow a branch unseen."""
+        js = "\n".join(
+            marp_client.get("/static/%s" % name).text
+            for name in ("app.js", "deck_dom.js")
+        )
+        js = re.sub(r"//.*$", "", js, flags=re.M)
         reads = re.findall(r"(?<![A-Za-z0-9_$-])layout(?![A-Za-z0-9_$-])", js)
         assert len(reads) == 1, (
             "the bundle mentions `layout` %d times, not once: the layout is "

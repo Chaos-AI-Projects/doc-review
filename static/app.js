@@ -577,15 +577,12 @@
     var slideIndex = 0;
     var deckFullscreen = false; // did requestFullscreen() actually take?
 
-    /* On-screen controls (#455).  A phone has no arrow keys and no Esc, so
-     * every keyboard action needs a pointer equivalent.  These action strings
-     * are the SAME vocabulary navLogic.presentationAction() produces for keys,
-     * and both routes end in the one dispatcher below. */
-    var PRESENTATION_CONTROLS = [
-        { action: "prev", glyph: "\u2039", label: "Previous slide" },
-        { action: "next", glyph: "\u203A", label: "Next slide" },
-        { action: "exit", glyph: "\u2715", label: "Exit presentation" },
-    ];
+    /* The deck DOM itself is built by static/deck_dom.js, shared with the
+     * standalone presentation page on ChaosEternal.github.io (MS-619).  Its
+     * on-screen controls hand back the SAME action strings
+     * navLogic.presentationAction() produces for keys, so both input routes end
+     * in the one dispatcher below. */
+    var deckDom = window.docReviewDeck;
 
     function documentSource() {
         var el = document.getElementById("source-data");
@@ -621,75 +618,12 @@
         presentBtn.hidden = !(specs && specs.available);
     }
 
-    /* A control press is the pointer equivalent of a keypress, so it resolves
-     * through navLogic and lands in the same dispatcher.  The press stops here
-     * rather than bubbling: there is deliberately no whole-slide
-     * click-to-advance (#455) — a tap anywhere would make an overflowing slide
-     * impossible to scroll and text impossible to select on a phone. */
-    function onControlClick(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        applyPresentationAction(
-            navLogic.presentationControlAction(this.getAttribute("data-action"))
-        );
-    }
-
-    function buildControls() {
-        var bar = document.createElement("div");
-        bar.className = "presentation-controls";
-        for (var i = 0; i < PRESENTATION_CONTROLS.length; i++) {
-            var def = PRESENTATION_CONTROLS[i];
-            var btn = document.createElement("button");
-            btn.type = "button";
-            btn.className = "presentation-control control-" + def.action;
-            btn.setAttribute("data-action", def.action);
-            btn.setAttribute("aria-label", def.label);
-            btn.title = def.label;
-            btn.textContent = def.glyph;
-            btn.addEventListener("click", onControlClick);
-            bar.appendChild(btn);
-        }
-        return bar;
-    }
-
-    function buildDeck(specs) {
-        var deck = document.createElement("div");
-        deck.className = "presentation theme-" + specs.theme;
-        deck.tabIndex = -1;  // focusable, so the keys reach the deck
-
-        for (var i = 0; i < specs.slides.length; i++) {
-            var slide = specs.slides[i];
-            var section = document.createElement("section");
-            // Already whitelisted by view_specs, the one builder behind both
-            // a fresh /view and this soft-swapped Pyodide render (#462).
-            // Nothing here inspects the name; a JS-side fallback would be a
-            // second, divergent home for the whitelist.
-            section.className = "slide layout-" + slide.layout;
-            section.setAttribute("data-slide", slide.index);
-
-            for (var j = 0; j < slide.rows.length; j++) {
-                var row = slide.rows[j];
-                var blockEl = document.createElement("div");
-                blockEl.className = "slide-block";
-                // The review-mode anchor, carried onto the slide: same block,
-                // same line range, whichever mode you are looking at.
-                setLineAttrs(blockEl, row);
-                blockEl.innerHTML = row.html;
-                section.appendChild(blockEl);
-            }
-
-            if (specs.paginate) {
-                var num = document.createElement("div");
-                num.className = "slide-number";
-                num.textContent = slide.number + " / " + specs.slides.length;
-                section.appendChild(num);
-            }
-            deck.appendChild(section);
-        }
-        // Part of the deck DOM, so they leave with it on exit — presenting
-        // stays read-only and no stray chrome survives over the review view.
-        deck.appendChild(buildControls());
-        return deck;
+    /* A control press resolves through navLogic and lands in the same
+     * dispatcher the keys do.  deck_dom.js hands back the raw action string
+     * off the button; turning it into a presentation action stays here, so the
+     * static page can route the same press differently. */
+    function onControlAction(action) {
+        applyPresentationAction(navLogic.presentationControlAction(action));
     }
 
     function showSlide(index) {
@@ -789,7 +723,7 @@
             el.classList.remove("active");
         });
 
-        deckEl = buildDeck(specs);
+        deckEl = deckDom.buildDeck(document, specs, onControlAction);
         // The review DOM is hidden, never destroyed: coming back is a re-show,
         // with every comment still attached to its block.
         if (viewLayout) viewLayout.hidden = true;
@@ -825,7 +759,10 @@
         presenting = false;
     }
 
-    if (presentBtn && navLogic) {
+    // deckDom joins the gate: without it there is no deck to build, and
+    // offering a Present button that throws on click is worse than not
+    // offering one.
+    if (presentBtn && navLogic && deckDom) {
         presentBtn.addEventListener("click", function () {
             if (presenting) {
                 exitPresentation();
