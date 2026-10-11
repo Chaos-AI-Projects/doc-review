@@ -576,6 +576,7 @@
     var deckEl = null;
     var slideIndex = 0;
     var deckFullscreen = false; // did requestFullscreen() actually take?
+    var detachStageFit = null;  // undoes attachStageFit's resize listener
 
     /* The deck DOM itself is built by static/deck_dom.js, shared with the
      * standalone presentation page on ChaosEternal.github.io (MS-619).  Its
@@ -729,6 +730,7 @@
         if (viewLayout) viewLayout.hidden = true;
         document.body.classList.add("presenting");
         document.body.appendChild(deckEl);
+        detachStageFit = deckDom.attachStageFit(deckEl, window);
         presentBtn.classList.add("active");
         showSlide(0);
         deckEl.focus();
@@ -749,6 +751,10 @@
     function exitPresentation() {
         if (!presenting && !deckEl) return;
         releaseDeckFullscreen();
+        if (detachStageFit) {
+            detachStageFit();
+            detachStageFit = null;
+        }
         if (deckEl) {
             deckEl.remove();
             deckEl = null;

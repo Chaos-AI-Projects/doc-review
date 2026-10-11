@@ -257,6 +257,52 @@ function specs(overrides) {
         deck && deck.querySelectorAll("section.slide").length, 2);
 })();
 
+// 9. The fixed stage (DR-2): slides are laid out at 1920x1080 and scaled as
+//    a whole, so a slide looks the same on a phone and a monitor.  The scale
+//    is the largest that fits both axes; the other axis letterboxes.
+(function () {
+    assert("stage: native size", deckDom.stageScale(1920, 1080), 1);
+    assert("stage: half size", deckDom.stageScale(960, 540), 0.5);
+    assert("stage: wide window letterboxes", deckDom.stageScale(1920, 540), 0.5);
+    assert("stage: tall phone fits width", deckDom.stageScale(390, 844), 390 / 1920);
+    // A window that reports no size (a hidden tab or iframe) must not scale
+    // the deck to nothing: there is nothing to fit, so stay at native size.
+    assert("stage: zero window", deckDom.stageScale(0, 0), 1);
+    assert("stage: missing window size", deckDom.stageScale(undefined, 600), 1);
+})();
+
+// 10. attachStageFit fits at once, refits on every resize, and its detach
+//     really removes the listener -- the review app enters and exits the deck
+//     many times per page, and a leaked listener per entry would pile up.
+(function () {
+    var props = {};
+    var deck = { style: { setProperty: function (k, v) { props[k] = v; } } };
+    var win = {
+        innerWidth: 960, innerHeight: 540, listeners: {},
+        addEventListener: function (t, fn) {
+            (this.listeners[t] = this.listeners[t] || []).push(fn);
+        },
+        removeEventListener: function (t, fn) {
+            this.listeners[t] = (this.listeners[t] || []).filter(function (f) {
+                return f !== fn;
+            });
+        },
+        fire: function (t) {
+            (this.listeners[t] || []).slice().forEach(function (f) { f(); });
+        },
+    };
+    var detach = deckDom.attachStageFit(deck, win);
+    assert("fit: immediate", props["--stage-scale"], "0.5");
+    win.innerWidth = 480; win.innerHeight = 1000;
+    win.fire("resize");
+    assert("fit: refits on resize", props["--stage-scale"], "0.25");
+    detach();
+    assert("fit: detach removes the listener", (win.listeners.resize || []).length, 0);
+    win.innerWidth = 1920; win.innerHeight = 1080;
+    win.fire("resize");
+    assert("fit: no refit after detach", props["--stage-scale"], "0.25");
+})();
+
 if (failures.length) {
     console.error("FAIL (" + failures.length + "):");
     failures.forEach(function (f) { console.error("  - " + f); });

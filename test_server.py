@@ -9146,3 +9146,44 @@ class TestProxyIdentityAuthor:
         posted = [c for c in listed if c["body"] == "Form spoof attempt"]
         assert len(posted) == 1
         assert posted[0]["author"] == "anon"
+
+
+class TestPresentationStage:
+    """DR-2: slides are a fixed 1920x1080 stage scaled as a whole."""
+
+    def _rule(self, css, selector):
+        import re
+        m = re.search(re.escape(selector) + r"\s*\{([^}]+)\}", css)
+        assert m, f"Expected a {selector} rule in style.css"
+        return m.group(1)
+
+    def test_slide_is_a_fixed_stage(self, client):
+        css = client.get("/static/style.css").text
+        rule = self._rule(css, ".presentation .slide")
+        assert "width: 1920px" in rule
+        assert "height: 1080px" in rule
+        assert "scale(var(--stage-scale" in rule
+        # The old reflowing sizes would fight the scale.
+        assert "vw" not in rule and "vh" not in rule
+
+    def test_deck_clips_the_unscaled_layout_box(self, client):
+        css = client.get("/static/style.css").text
+        assert "overflow: hidden" in self._rule(css, ".presentation")
+
+    def test_title_reveal_respects_reduced_motion(self, client):
+        import re
+        css = client.get("/static/style.css").text
+        assert "@keyframes slide-reveal" in css
+        m = re.search(
+            r"@media \(prefers-reduced-motion: reduce\)\s*\{(.*?)\n\}", css, re.S)
+        assert m, "reveal must have a prefers-reduced-motion opt-out"
+        assert "animation: none" in m.group(1)
+
+    def test_both_callers_fit_the_stage(self, client):
+        app = client.get("/static/app.js").text
+        assert "deckDom.attachStageFit(deckEl, window)" in app
+        # Exit must detach, or every entry leaks a resize listener.
+        exit_body = app.split("function exitPresentation()", 1)[1].split("\n    }\n", 1)[0]
+        assert "detachStageFit()" in exit_body
+        standalone = client.get("/static/standalone.js").text
+        assert "deckDom.attachStageFit(deckEl, doc.defaultView)" in standalone

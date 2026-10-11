@@ -133,8 +133,39 @@
         return deck;
     }
 
+    /* The fixed stage (DR-2), after frontend-slides' viewport-base.css.  A
+     * slide is laid out at 1920x1080 and scaled as a whole, so it looks the
+     * same on a phone and a monitor instead of reflowing per device.  CSS
+     * cannot divide one length by another to get a scale factor, so the
+     * factor is computed here and handed to style.css as --stage-scale. */
+    var STAGE_WIDTH = 1920;
+    var STAGE_HEIGHT = 1080;
+
+    /* The largest scale at which the stage fits both axes; the other axis
+     * letterboxes.  A window that reports no size has nothing to fit, and
+     * scaling to 0 would make the deck vanish, so it stays at native size. */
+    function stageScale(width, height) {
+        if (!(width > 0) || !(height > 0)) return 1;
+        return Math.min(width / STAGE_WIDTH, height / STAGE_HEIGHT);
+    }
+
+    /* Fit `deck` to `win` now and on every resize.  Returns the detach
+     * function: the review app enters and leaves the deck many times per
+     * page, and a listener left behind per entry would pile up. */
+    function attachStageFit(deck, win) {
+        function fit() {
+            deck.style.setProperty("--stage-scale",
+                String(stageScale(win.innerWidth, win.innerHeight)));
+        }
+        fit();
+        win.addEventListener("resize", fit);
+        return function () { win.removeEventListener("resize", fit); };
+    }
+
     var api = {
         PRESENTATION_CONTROLS: PRESENTATION_CONTROLS,
+        attachStageFit: attachStageFit,
+        stageScale: stageScale,
         buildControls: buildControls,
         buildDeck: buildDeck,
     };

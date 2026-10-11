@@ -684,6 +684,11 @@ body.presenting { overflow: hidden; }
     display: flex;
     align-items: center;
     justify-content: center;
+    /* The slide's layout box stays 1920x1080 whatever its scale (DR-2), so
+     * on any smaller window it overflows the deck before the transform
+     * shrinks it.  Clipped here, or the page grows scrollbars around a slide
+     * that visibly fits. */
+    overflow: hidden;
     outline: none;
 }
 /* Real full screen is requested by app.js; :fullscreen only has to keep the
@@ -733,18 +738,27 @@ body.presenting { overflow: hidden; }
 .presentation-control.control-next { right: .75rem; top: 50%; transform: translateY(-50%); }
 .presentation-control.control-exit { right: .75rem; top: .75rem; }
 
+/* A fixed 1920x1080 stage, scaled as a whole (DR-2), after frontend-slides'
+ * viewport-base.css.  Sizes inside a slide are therefore in stage pixels, not
+ * viewport units: a slide is laid out once and looks the same on a phone and
+ * a monitor.  deck_dom.js's attachStageFit() supplies --stage-scale.  `flex:
+ * none` keeps the deck's flexbox from shrinking the box it is about to scale,
+ * and the deck centres it, so scaling about the centre lands it mid-window. */
 .presentation .slide {
     position: relative;  /* anchors .slide-number */
     box-sizing: border-box;
-    width: min(96vw, calc((100vh - 4rem) * 16 / 9));
-    height: min(calc(100vh - 4rem), calc(96vw * 9 / 16));
-    padding: 3rem 4rem;
+    flex: none;
+    width: 1920px;
+    height: 1080px;
+    transform: scale(var(--stage-scale, 1));
+    transform-origin: center center;
+    padding: 96px 128px;
     overflow: auto;
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 0.75rem;
-    font-size: clamp(1rem, 2.2vh, 1.6rem);
+    gap: 20px;
+    font-size: 30px;
 }
 .presentation .slide[hidden] { display: none; }
 
@@ -766,9 +780,9 @@ body.presenting { overflow: hidden; }
 
 .presentation .slide-number {
     position: absolute;
-    bottom: 1.5rem;
-    right: 2rem;
-    font-size: 0.8rem;
+    bottom: 40px;
+    right: 56px;
+    font-size: 20px;
     color: #999;
 }
 
@@ -787,6 +801,26 @@ body.presenting { overflow: hidden; }
 .presentation .slide.layout-title h2 { font-size: 1.5em; font-weight: normal; }
 /* Subtitle weight without hiding it: #57606a on white is 4.6:1. */
 .presentation .slide.layout-title p { font-size: 1.15em; color: #57606a; }
+
+/* Title-slide staggered reveal (DR-2): each block rises in a beat after the
+ * one before it.  It replays on every visit, because showing a slide flips it
+ * from display: none, which restarts its animations.  `both` holds the first
+ * frame through the delay, so a later block never flashes in early. */
+@keyframes slide-reveal {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: none; }
+}
+.presentation .slide.layout-title .slide-block {
+    animation: slide-reveal 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.presentation .slide.layout-title .slide-block:nth-child(2) { animation-delay: 0.12s; }
+.presentation .slide.layout-title .slide-block:nth-child(3) { animation-delay: 0.24s; }
+.presentation .slide.layout-title .slide-block:nth-child(n+4) { animation-delay: 0.36s; }
+
+/* Motion is decoration here, so a reader who asked for less gets none. */
+@media (prefers-reduced-motion: reduce) {
+    .presentation .slide.layout-title .slide-block { animation: none; }
+}
 
 /* `.slide` is a flex column, so centring needs the cross axis too — text-align
  * alone leaves each block stretched the full width. */

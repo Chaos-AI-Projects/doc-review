@@ -120,6 +120,9 @@
                 handleAction(navLogic.presentationControlAction(name));
             }, DECK_ACTIONS);
             mount.appendChild(deckEl);
+            /* Never detached: this page has no exit, so the deck lives as
+             * long as the tab.  A Node stub document has no window to fit. */
+            if (doc.defaultView) deckDom.attachStageFit(deckEl, doc.defaultView);
             showSlide(0);
             if (deckEl.focus) deckEl.focus();  // so the keys reach the deck
             return deckEl;
