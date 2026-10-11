@@ -24,9 +24,13 @@ It must not change (cf. the 2026-07-22 comment-loss incident).
 """
 
 
-# Themes presentation mode ships CSS for (#452).  An unknown front-matter
-# value falls back to "default" rather than reaching a class attribute.
-PRESENTATION_THEMES = ("default", "gaia", "uncover")
+# Themes presentation mode ships CSS for (#452; the last four DR-2).  An
+# unknown front-matter value falls back to "default" rather than reaching a
+# class attribute.
+PRESENTATION_THEMES = (
+    "default", "gaia", "uncover",
+    "swiss-modern", "paper-ink", "dark-botanical", "vintage-editorial",
+)
 
 # Per-slide layouts presentation mode ships CSS for (#462).  Same rule as the
 # themes above: the name lands in a class attribute, so only ours may reach it.

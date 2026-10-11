@@ -252,7 +252,7 @@ Front-matter directives:
 | Directive | Values | Effect |
 | --- | --- | --- |
 | `marp` | `true` | Required. Offers the document for presentation. Case-insensitive. |
-| `theme` | `default`, `gaia`, `uncover` | Deck styling. Case-**sensitive**, and an unrecognised name falls back to `default` silently, so `Gaia` gives you `default`. |
+| `theme` | `default`, `gaia`, `uncover`, `swiss-modern`, `paper-ink`, `dark-botanical`, `vintage-editorial` | Deck styling. Case-**sensitive**, and an unrecognised name falls back to `default` silently, so `Gaia` gives you `default`. |
 | `paginate` | `true` | Shows a slide number on each slide. Case-insensitive. |
 
 ### Slide breaks

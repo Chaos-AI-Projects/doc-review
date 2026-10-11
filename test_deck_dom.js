@@ -264,7 +264,19 @@ function specs(overrides) {
     assert("stage: native size", deckDom.stageScale(1920, 1080), 1);
     assert("stage: half size", deckDom.stageScale(960, 540), 0.5);
     assert("stage: wide window letterboxes", deckDom.stageScale(1920, 540), 0.5);
-    assert("stage: tall phone fits width", deckDom.stageScale(390, 844), 390 / 1920);
+    // Below ~1000px wide the stage's own 128px side padding scales smaller
+    // than the 48px prev/next controls, which then cover slide text.  The
+    // stage shrinks just enough to keep 64px of window clear on each side.
+    assert("stage: tall phone keeps a control gutter", deckDom.stageScale(390, 844), (390 - 128) / 1664);
+    assert("stage: gutter leaves wide windows alone", deckDom.stageScale(1280, 720), 1280 / 1920);
+    // Too narrow for any gutter: fit the window rather than vanish or mirror.
+    assert("stage: no gutter at 128px", deckDom.stageScale(128, 500), 128 / 1920);
+    assert("stage: no gutter at 100px", deckDom.stageScale(100, 500), 100 / 1920);
+    (function () {
+        var w = 600, s = deckDom.stageScale(w, 2000);
+        var clear = (w - 1920 * s) / 2 + 128 * s;
+        assert("stage: text clears the controls at 600px", clear >= 64 - 1e-9, true);
+    })();
     // A window that reports no size (a hidden tab or iframe) must not scale
     // the deck to nothing: there is nothing to fit, so stay at native size.
     assert("stage: zero window", deckDom.stageScale(0, 0), 1);
@@ -276,9 +288,12 @@ function specs(overrides) {
 //     many times per page, and a leaked listener per entry would pile up.
 (function () {
     var props = {};
-    var deck = { style: { setProperty: function (k, v) { props[k] = v; } } };
+    // Sized from the deck, not the window: under iOS pinch-zoom innerWidth
+    // reports the zoomed visual viewport while the fixed deck keeps its size.
+    var deck = { clientWidth: 960, clientHeight: 540,
+                 style: { setProperty: function (k, v) { props[k] = v; } } };
     var win = {
-        innerWidth: 960, innerHeight: 540, listeners: {},
+        innerWidth: 9999, innerHeight: 9999, listeners: {},
         addEventListener: function (t, fn) {
             (this.listeners[t] = this.listeners[t] || []).push(fn);
         },
@@ -293,12 +308,12 @@ function specs(overrides) {
     };
     var detach = deckDom.attachStageFit(deck, win);
     assert("fit: immediate", props["--stage-scale"], "0.5");
-    win.innerWidth = 480; win.innerHeight = 1000;
+    deck.clientWidth = 1920; deck.clientHeight = 270;
     win.fire("resize");
     assert("fit: refits on resize", props["--stage-scale"], "0.25");
     detach();
     assert("fit: detach removes the listener", (win.listeners.resize || []).length, 0);
-    win.innerWidth = 1920; win.innerHeight = 1080;
+    deck.clientWidth = 1920; deck.clientHeight = 1080;
     win.fire("resize");
     assert("fit: no refit after detach", props["--stage-scale"], "0.25");
 })();

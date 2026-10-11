@@ -17,6 +17,7 @@ import pytest
 from renderer import _COMMENTS_ONLY_RE, render_markdown_blocks
 from view_specs import (
     PRESENTATION_LAYOUTS,
+    PRESENTATION_THEMES,
     _is_all_comments,
     comment_directives,
     front_matter_directives,
@@ -325,6 +326,16 @@ class TestPresentationSpecs:
         source = "---\nmarp: true\ntheme: ../../evil \"x\n---\n\n# T\n"
         blocks = render_markdown_blocks(source)
         assert presentation_specs(blocks, None, source)["theme"] == "default"
+
+    @pytest.mark.parametrize("theme", [
+        "default", "gaia", "uncover",  # pre-DR-2 decks must keep their theme
+        "swiss-modern", "paper-ink", "dark-botanical", "vintage-editorial",
+    ])
+    def test_every_shipped_theme_is_accepted(self, theme):
+        source = f"---\nmarp: true\ntheme: {theme}\n---\n\n# T\n"
+        blocks = render_markdown_blocks(source)
+        assert theme in PRESENTATION_THEMES
+        assert presentation_specs(blocks, None, source)["theme"] == theme
 
     def test_paginate_is_a_boolean(self, marp_blocks):
         assert presentation_specs(marp_blocks, None, MARP_DOC)["paginate"] is True

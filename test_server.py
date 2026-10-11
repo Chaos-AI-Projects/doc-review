@@ -9187,3 +9187,93 @@ class TestPresentationStage:
         assert "detachStageFit()" in exit_body
         standalone = client.get("/static/standalone.js").text
         assert "deckDom.attachStageFit(deckEl, doc.defaultView)" in standalone
+
+
+class TestPresentationThemes:
+    """DR-2 part 2: opt-in themes with self-hosted fonts."""
+
+    def _font_faces(self, css):
+        import re
+        return re.findall(r"@font-face\s*\{([^}]+)\}", css)
+
+    def test_every_whitelisted_theme_has_css(self, client):
+        from view_specs import PRESENTATION_THEMES
+        css = client.get("/static/style.css").text
+        for theme in PRESENTATION_THEMES:
+            if theme == "default":
+                continue  # the base .presentation rules are the default
+            assert f".presentation.theme-{theme} " in css or \
+                f".presentation.theme-{theme}{{" in css.replace(" {", "{"), theme
+
+    def test_new_themes_keep_their_background_in_full_screen(self, client):
+        css = client.get("/static/style.css").text
+        for theme in ("swiss-modern", "paper-ink", "dark-botanical",
+                      "vintage-editorial"):
+            assert f".presentation.theme-{theme}:fullscreen" in css, theme
+
+    def test_fonts_are_self_hosted_and_served(self, client):
+        import re
+        css = client.get("/static/style.css").text
+        faces = self._font_faces(css)
+        assert len(faces) >= 8, "each new theme brings a display + body face"
+        for face in faces:
+            urls = re.findall(r"url\(([^)]+)\)", face)
+            assert urls, face
+            for url in urls:
+                url = url.strip("'\"")
+                # Relative to style.css; never a third-party CDN.
+                assert not url.startswith(("http:", "https:", "//")), url
+                resp = client.get("/static/" + url)
+                assert resp.status_code == 200, url
+                assert resp.content[:4] == b"wOF2", url
+
+    def test_every_font_file_carries_its_licence(self):
+        fonts = Path(__file__).parent / "static" / "fonts"
+        families = {p.name.rsplit("-", 2)[0] for p in fonts.glob("*.woff2")}
+        assert families
+        for family in families:
+            assert (fonts / f"LICENSE-{family}.txt").is_file(), family
+
+    def test_new_themes_avoid_generic_display_fonts(self, client):
+        import re
+        css = client.get("/static/style.css").text
+        rules = re.findall(r"\.presentation\.theme-[a-z-]+[^{]*\{([^}]+)\}", css)
+        for body in rules:
+            for m in re.findall(r"font-family:\s*([^;]+);", body):
+                first = m.split(",")[0].strip().strip("'\"")
+                assert first not in ("Inter", "Roboto", "Arial"), m
+
+    def test_quote_reset_outranks_the_quote_layout_rule(self, client):
+        """On a quote-layout slide a `>` quote is p inside blockquote.  The
+        theme's `.slide.layout-quote p` box must not draw a second time on
+        that p, so the reset needs the layout class too, or it loses on
+        specificity (four classes beat three)."""
+        css = client.get("/static/style.css").text
+        for theme in ("swiss-modern", "paper-ink", "dark-botanical",
+                      "vintage-editorial"):
+            assert (f".presentation.theme-{theme} .slide.layout-quote "
+                    "blockquote p") in css, theme
+
+    def test_dark_theme_table_headers_are_dark(self, client):
+        """The base `th` is light grey with no colour, which leaves the dark
+        theme's light text at ~1.1:1 on it."""
+        css = client.get("/static/style.css").text
+        assert ".presentation.theme-dark-botanical .slide th" in css
+
+    def test_dark_theme_diagram_fallback_is_dark_text(self, client):
+        """The diagram box stays white, so until Mermaid draws (or for good on
+        a parse error) the dark theme's light text would sit at ~1.2:1 on it."""
+        css = client.get("/static/style.css").text
+        start = css.index(".presentation.theme-dark-botanical .slide .mermaid")
+        rule = css[start:css.index("}", start)]
+        assert "color:" in rule
+
+    def test_quote_paragraphs_keep_a_gap(self, client):
+        """The quote reset zeroes each p's margin, so a `> a` / `>` / `> b`
+        quote needs its own gap or the paragraphs run together."""
+        css = client.get("/static/style.css").text
+        for theme in ("swiss-modern", "paper-ink", "dark-botanical",
+                      "vintage-editorial"):
+            assert f".presentation.theme-{theme} .slide blockquote p + p" in css, theme
+            assert (f".presentation.theme-{theme} .slide.layout-quote "
+                    ".slide-block blockquote p + p") in css, theme
