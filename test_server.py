@@ -9280,15 +9280,22 @@ class TestPresentationThemes:
 
 
 class TestFavicon:
-    """DR-3: every page carries an inline SVG favicon reading "Dr"."""
+    """DR-3/DR-4: every page carries an inline SVG favicon of a page with a
+    comment bubble. DR-4 dropped the "Dr" monogram, which read as doctor or
+    drive."""
 
     def _svg(self, html):
         from urllib.parse import unquote
         link = re.search(r'<link rel="icon" type="image/svg\+xml" href="data:image/svg\+xml,([^"]*)">', html)
         return unquote(link.group(1)) if link else None
 
-    def test_index_and_view_have_dr_favicon(self, client):
+    def test_index_and_view_have_page_and_bubble_favicon(self, client):
+        import xml.etree.ElementTree as ET
+        ns = "{http://www.w3.org/2000/svg}"
         for path in ("/", "/view?path=test.md"):
             svg = self._svg(client.get(path).text)
             assert svg, path
-            assert re.search(r"<text[^>]*>Dr</text>", svg), path
+            root = ET.fromstring(svg)
+            assert root.find(f".//{ns}text") is None, path
+            ids = {el.get("id") for el in root.iter() if el.get("id")}
+            assert {"page", "fold", "bubble"} <= ids, (path, ids)
