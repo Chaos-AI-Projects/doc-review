@@ -9277,3 +9277,18 @@ class TestPresentationThemes:
             assert f".presentation.theme-{theme} .slide blockquote p + p" in css, theme
             assert (f".presentation.theme-{theme} .slide.layout-quote "
                     ".slide-block blockquote p + p") in css, theme
+
+
+class TestFavicon:
+    """DR-3: every page carries an inline SVG favicon reading "Dr"."""
+
+    def _svg(self, html):
+        from urllib.parse import unquote
+        link = re.search(r'<link rel="icon" type="image/svg\+xml" href="data:image/svg\+xml,([^"]*)">', html)
+        return unquote(link.group(1)) if link else None
+
+    def test_index_and_view_have_dr_favicon(self, client):
+        for path in ("/", "/view?path=test.md"):
+            svg = self._svg(client.get(path).text)
+            assert svg, path
+            assert re.search(r"<text[^>]*>Dr</text>", svg), path
