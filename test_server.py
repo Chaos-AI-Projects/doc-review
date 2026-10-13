@@ -3333,6 +3333,13 @@ class TestPresentationRoundTwo:
         z = re.search(r"z-index:\s*(\d+)", deck)
         assert z and int(z.group(1)) > 2, "the deck can still be painted over"
 
+    def test_a_hidden_deck_is_not_displayed(self, marp_client):
+        # The deck's own `display: flex` outranks the user agent's [hidden]
+        # rule, so without this one the standalone page's markdown view (DR-6)
+        # sits under a fixed white deck and shows nothing.
+        hidden = self._css_rule(marp_client, ".presentation[hidden]")
+        assert re.search(r"display:\s*none", hidden), hidden
+
     # ── 2. On-screen controls (the mobile ask) ──
 
     def test_the_deck_carries_prev_next_and_exit_controls(self, marp_client):

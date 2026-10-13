@@ -71,6 +71,31 @@
      * fullscreen on Esc without being asked. */
     var DECK_ACTIONS = ["prev", "next"];
 
+    /* The two views a published talk offers (DR-6).  Chaos asked for "a switch
+     * between markdown view and presentation view", so the toggle names the
+     * view a click leads to in his words.  ?view=markdown opens on the
+     * document; anything else opens on the slides, which is all this page did
+     * before. */
+    var VIEW_LABELS = { slides: "Markdown view", markdown: "Presentation view" };
+
+    function initialView(param) {
+        return param === "markdown" ? "markdown" : "slides";
+    }
+
+    /* The markdown view is built from the SAME rendered blocks as the deck,
+     * so the two views cannot disagree about what the talk says.  The front
+     * matter is dropped: its directives configure the deck, nobody wrote them
+     * to be read.  The html is the renderer's sanitized output, which the deck
+     * already assigns with innerHTML. */
+    function documentHtml(blocks) {
+        var parts = [];
+        for (var i = 0; i < (blocks || []).length; i++) {
+            if (blocks[i].type === "front_matter") continue;
+            parts.push(blocks[i].html);
+        }
+        return parts.join("\n");
+    }
+
     /* The deck, its navigation and its status line, over one mount element. */
     function createDeckApp(env) {
         var doc = env.doc;
@@ -80,7 +105,11 @@
         var statusEl = env.statusEl;
 
         var deckEl = null;
+        var articleEl = null;
+        var toggleEl = null;
+        var stageFit = null;
         var index = 0;
+        var view = "slides";
 
         function sections() {
             return deckEl ? deckEl.querySelectorAll("section.slide") : [];
@@ -105,6 +134,10 @@
          * it in the listener instead would put a second copy of nav_logic's
          * key vocabulary in an inline script no test can reach. */
         function handleAction(action) {
+            /* The document is showing, so an arrow key has to scroll it.  A
+             * deck stepping invisibly behind the document would reopen on a
+             * slide the viewer never chose. */
+            if (view !== "slides") return false;
             if (action === "next") { showSlide(index + 1); return true; }
             if (action === "prev") { showSlide(index - 1); return true; }
             /* Anything else is inert, "exit" included: Esc KEEPS the deck,
@@ -115,22 +148,54 @@
             return false;
         }
 
-        function render(specs) {
+        function setView(next) {
+            view = next === "markdown" ? "markdown" : "slides";
+            if (deckEl) deckEl.hidden = view !== "slides";
+            if (articleEl) articleEl.hidden = view !== "markdown";
+            if (toggleEl) toggleEl.textContent = VIEW_LABELS[view];
+            /* A hidden deck measures 0x0, so a resize while the document was
+             * showing left it at scale 1: refit before anyone sees it. */
+            if (view === "slides" && stageFit) stageFit.fit();
+            /* The focus follows the view.  A click leaves it on the toggle in
+             * Chrome, and Space would then press the toggle again instead of
+             * scrolling the document. */
+            var focusEl = view === "slides" ? deckEl : articleEl;
+            if (focusEl && focusEl.focus) focusEl.focus();
+        }
+
+        function render(specs, blocks, startView) {
             deckEl = deckDom.buildDeck(doc, specs, function (name) {
                 handleAction(navLogic.presentationControlAction(name));
             }, DECK_ACTIONS);
             mount.appendChild(deckEl);
             /* Never detached: this page has no exit, so the deck lives as
              * long as the tab.  A Node stub document has no window to fit. */
-            if (doc.defaultView) deckDom.attachStageFit(deckEl, doc.defaultView);
+            if (doc.defaultView) stageFit = deckDom.attachStageFit(deckEl, doc.defaultView);
+
+            articleEl = doc.createElement("article");
+            articleEl.className = "standalone-document";
+            articleEl.tabIndex = -1;  // focusable, so Space scrolls it
+            articleEl.innerHTML = documentHtml(blocks);
+            mount.appendChild(articleEl);
+
+            toggleEl = doc.createElement("button");
+            toggleEl.type = "button";
+            toggleEl.className = "view-toggle";
+            toggleEl.addEventListener("click", function () {
+                setView(view === "slides" ? "markdown" : "slides");
+            });
+            mount.appendChild(toggleEl);
+
             showSlide(0);
-            if (deckEl.focus) deckEl.focus();  // so the keys reach the deck
+            setView(startView);  // focuses whichever view is showing
             return deckEl;
         }
 
         return {
             render: render,
             showSlide: showSlide,
+            setView: setView,
+            view: function () { return view; },
             slideIndex: function () { return index; },
             handleAction: handleAction,
             handleKey: function (key) {
@@ -151,6 +216,7 @@
      * opts.createRuntime({renderer, viewSpecs}) -> Promise<runtime>
      *   runtime.renderBlocks(source)
      *   runtime.presentationSpecs(blocks, commentsByBlock, source)
+     * opts.view    "slides" or "markdown", the view to open on
      */
     function boot(opts) {
         var app = opts.app;
@@ -187,7 +253,7 @@
                         + "one slide.");
                     return false;
                 }
-                app.render(specs);
+                app.render(specs, blocks, opts.view);
                 app.setStatus("ready", "");
                 return true;
             });
@@ -272,6 +338,7 @@
             },
             fetchText: fetchText,
             createRuntime: env.createRuntime,
+            view: initialView(params.get("view")),
         });
     }
 

@@ -316,6 +316,12 @@ function specs(overrides) {
     deck.clientWidth = 1920; deck.clientHeight = 1080;
     win.fire("resize");
     assert("fit: no refit after detach", props["--stage-scale"], "0.25");
+    // A deck hidden through a resize measured 0x0 and fell back to scale 1,
+    // so whoever shows it again has to be able to refit it on the spot (DR-6).
+    deck.clientWidth = 960; deck.clientHeight = 540;
+    assert("fit: the detach exposes a refit", typeof detach.fit, "function");
+    detach.fit();
+    assert("fit: the refit re-measures the deck", props["--stage-scale"], "0.5");
 })();
 
 if (failures.length) {

@@ -755,6 +755,147 @@ cases.push(function () {
         });
 });
 
+/* ── The markdown view (DR-6) ──
+ *
+ * Chaos asked for "a switch between markdown view and presentation view" on
+ * the published deck.  The markdown view is the same rendered blocks the deck
+ * is built from, laid out as one document, so the two views cannot disagree
+ * about what the talk says.
+ */
+
+var VIEW_BLOCKS = [
+    { type: "front_matter", start_line: 1, html: "<p>marp: true</p>" },
+    { type: "heading", start_line: 5, html: "<h1>One</h1>" },
+    { type: "hr", start_line: 7, html: "<hr>" },
+    { type: "heading", start_line: 9, html: "<h1>Two</h1>" },
+];
+
+function viewRuntime(log) {
+    return function () {
+        return Promise.resolve({
+            renderBlocks: function () { return VIEW_BLOCKS; },
+            presentationSpecs: function () { return specsFixture(); },
+        });
+    };
+}
+
+/* deck_dom with its stage fit swapped for a counter, since the Node stub has
+ * no layout to measure.  The count is what proves the deck was refitted. */
+function countingDeckDom(fits) {
+    var out = {};
+    Object.keys(deckDom).forEach(function (k) { out[k] = deckDom[k]; });
+    out.attachStageFit = function () {
+        var detach = function () {};
+        detach.fit = function () { fits.push("fit"); };
+        return detach;
+    };
+    return out;
+}
+
+function bootForViews(search) {
+    var doc = makePageDoc(PAGE_DATASET);
+    doc.defaultView = {};
+    var fits = [];
+    var promise = standalone.bootPage({
+        doc: doc,
+        deckDom: countingDeckDom(fits),
+        navLogic: navLogic,
+        fetch: fakeFetch({
+            "renderer.py": "# r", "view_specs.py": "# v", "talk.md": MARKDOWN,
+        }, []),
+        search: search || "",
+        createRuntime: viewRuntime([]),
+    });
+    return promise.then(function (ok) {
+        var m = doc.mount;
+        return {
+            ok: ok,
+            doc: doc,
+            fits: fits,
+            deck: m.querySelectorAll("div.presentation")[0],
+            article: m.querySelectorAll("article.standalone-document")[0],
+            toggle: m.querySelectorAll("button.view-toggle")[0],
+        };
+    });
+}
+
+function press(doc, key) {
+    var claimed = false;
+    doc.listeners.keydown[0]({ key: key, preventDefault: function () { claimed = true; } });
+    return claimed;
+}
+
+// 18. A deck opens on the slides, with the markdown view built but hidden and
+//     a toggle naming the view it leads to.
+cases.push(function () {
+    return bootForViews().then(function (r) {
+        assert("case18 boot reports success", r.ok, true);
+        assert("case18 the markdown view exists", !!r.article, true);
+        assert("case18 and starts hidden", r.article && r.article.hidden, true);
+        assert("case18 the deck starts visible", r.deck.hidden, false);
+        assert("case18 the toggle exists", !!r.toggle, true);
+        assert("case18 the toggle leads to the markdown view",
+            r.toggle && r.toggle.textContent, "Markdown view");
+        // Every block but the front matter, in source order: the directives
+        // are configuration, not prose anybody wrote to be read.
+        assert("case18 the markdown view holds the blocks, front matter dropped",
+            r.article && r.article.innerHTML, "<h1>One</h1>\n<hr>\n<h1>Two</h1>");
+    });
+});
+
+// 19. The toggle swaps the views, and the slide keys stand down while the
+//     document is showing: an arrow key there has to scroll the page, and a
+//     deck stepping invisibly behind it would reopen on the wrong slide.
+cases.push(function () {
+    return bootForViews().then(function (r) {
+        press(r.doc, "ArrowRight");
+        r.toggle.click();
+        r.deck.focused = false;
+        assert("case19 the deck is hidden", r.deck.hidden, true);
+        // A click focuses the button in Chrome, and Space would then press it
+        // again instead of scrolling the document.
+        assert("case19 the document takes the focus", r.article.focused, true);
+        assert("case19 so it can be focused", r.article.tabIndex, -1);
+        assert("case19 the markdown view is shown", r.article.hidden, false);
+        assert("case19 the toggle now leads back",
+            r.toggle.textContent, "Presentation view");
+        assert("case19 an arrow key is left to the browser", press(r.doc, "ArrowRight"), false);
+        r.toggle.click();
+        assert("case19 the deck is back", r.deck.hidden, false);
+        assert("case19 the markdown view is hidden again", r.article.hidden, true);
+        var s = r.doc.mount.querySelectorAll("section.slide");
+        assert("case19 the deck kept its slide", s[1].hidden, false);
+        assert("case19 the deck took the focus back", r.deck.focused, true);
+        assert("case19 the keys drive the deck again", press(r.doc, "ArrowLeft"), true);
+    });
+});
+
+// 21. Showing the deck refits it.  While hidden it measures 0x0, so a resize
+//     in the markdown view (a phone rotating, iOS collapsing its toolbar)
+//     leaves it at scale 1, a cropped 1920x1080 slide.
+cases.push(function () {
+    return bootForViews().then(function (r) {
+        r.toggle.click();
+        var before = r.fits.length;
+        r.toggle.click();
+        assert("case21 showing the deck refits it", r.fits.length, before + 1);
+    });
+});
+
+// 20. ?view=markdown opens on the document, so a link can point at either.
+//     Anything else opens on the slides, the page's job before DR-6.
+cases.push(function () {
+    return bootForViews("?view=markdown").then(function (r) {
+        assert("case20 ?view=markdown hides the deck", r.deck.hidden, true);
+        assert("case20 and shows the document", r.article.hidden, false);
+        assert("case20 the toggle leads to the slides",
+            r.toggle.textContent, "Presentation view");
+        return bootForViews("?view=bogus");
+    }).then(function (r) {
+        assert("case20 an unknown view opens on the slides", r.deck.hidden, false);
+    });
+});
+
 /* ── Run ── */
 
 cases.reduce(function (chain, fn, i) {

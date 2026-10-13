@@ -163,7 +163,11 @@
 
     /* Fit `deck` to `win` now and on every resize.  Returns the detach
      * function: the review app enters and leaves the deck many times per
-     * page, and a listener left behind per entry would pile up. */
+     * page, and a listener left behind per entry would pile up.
+     *
+     * The detach carries the fit itself as `.fit`.  A hidden deck measures
+     * 0x0 and falls back to scale 1, so a page that hides the deck through a
+     * resize has to refit it when it shows it again (DR-6). */
     function attachStageFit(deck, win) {
         /* Measured on the deck, not the window: under iOS pinch-zoom
          * innerWidth reports the zoomed visual viewport while the fixed deck
@@ -174,7 +178,9 @@
         }
         fit();
         win.addEventListener("resize", fit);
-        return function () { win.removeEventListener("resize", fit); };
+        var detach = function () { win.removeEventListener("resize", fit); };
+        detach.fit = fit;
+        return detach;
     }
 
     var api = {

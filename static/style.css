@@ -285,18 +285,22 @@ main { padding: 1rem; }
  * a paragraph is therefore the only child of its cell: a rule that reads as
  * though it trims one trailing gap in fact cancelled the gap between every
  * pair of paragraphs in the document. */
-.line-content p {
+.line-content p,
+.standalone-document p {
     margin: 0 0 .6em;
 }
 
 .line-content blockquote > p:last-child,
-.line-content li > p:last-child {
+.line-content li > p:last-child,
+.standalone-document blockquote > p:last-child,
+.standalone-document li > p:last-child {
     margin-bottom: 0;
 }
 
 /* 1.5em is the list indent used below, so a quote and a bullet at the same
  * depth line up to within the width of the rule itself. */
-.line-content blockquote {
+.line-content blockquote,
+.standalone-document blockquote {
     padding-left: 1.5em;
     border-left: 3px solid var(--border);
     color: #57606a;
@@ -304,12 +308,15 @@ main { padding: 1rem; }
 
 /* ── List indent inside source lines ── */
 .line-content ul,
-.line-content ol {
+.line-content ol,
+.standalone-document ul,
+.standalone-document ol {
     padding-left: 1.5em;
     margin: 0;
 }
 
-.line-content li {
+.line-content li,
+.standalone-document li {
     list-style-position: outside;
 }
 
@@ -351,7 +358,8 @@ main { padding: 1rem; }
 /* ── Inline code ── */
 /* Runs of spaces inside a code span are content, not formatting, so this is
  * the one inline element that keeps the whitespace mode the cell gave up. */
-.line-content code {
+.line-content code,
+.standalone-document code {
     background: #f3f4f6;
     padding: .1em .3em;
     border-radius: 3px;
@@ -361,7 +369,8 @@ main { padding: 1rem; }
 }
 
 /* ── Fenced code blocks (<pre><code> from markdown parser) ── */
-.line-content pre {
+.line-content pre,
+.standalone-document pre {
     background: #f3f4f6;
     padding: .5em .75em;
     border-radius: 4px;
@@ -376,7 +385,8 @@ main { padding: 1rem; }
  * element too, and a declaration ON the element beats the `pre` its parent
  * only offers by inheritance.  Without it fenced code soft-wraps and the
  * `overflow-x: auto` above becomes unreachable. */
-.line-content pre code {
+.line-content pre code,
+.standalone-document pre code {
     background: none;
     padding: 0;
     border-radius: 0;
@@ -394,7 +404,8 @@ main { padding: 1rem; }
  * `.line-content`, so a slide would otherwise lose both the `pre` that makes
  * the fallback readable and the bound on the rendered SVG. */
 .line-content .mermaid,
-.presentation .slide .mermaid {
+.presentation .slide .mermaid,
+.standalone-document .mermaid {
     background: #fff;
     padding: .25em 0;
     white-space: pre;
@@ -402,7 +413,8 @@ main { padding: 1rem; }
 }
 
 .line-content .mermaid svg,
-.presentation .slide .mermaid svg {
+.presentation .slide .mermaid svg,
+.standalone-document .mermaid svg {
     max-width: 100%;
     height: auto;
 }
@@ -419,7 +431,8 @@ main { padding: 1rem; }
  * keeps a narrow table narrow, and `border-collapse` is inherited, so the
  * anonymous table box the rows still form picks it up. */
 .line-content table,
-.presentation .slide table {
+.presentation .slide table,
+.standalone-document table {
     border-collapse: collapse;
     display: block;
     width: max-content;
@@ -429,7 +442,8 @@ main { padding: 1rem; }
 }
 
 .line-content table:last-child,
-.presentation .slide table:last-child {
+.presentation .slide table:last-child,
+.standalone-document table:last-child {
     margin-bottom: 0;
 }
 
@@ -438,7 +452,9 @@ main { padding: 1rem; }
 .line-content th,
 .line-content td,
 .presentation .slide th,
-.presentation .slide td {
+.presentation .slide td,
+.standalone-document th,
+.standalone-document td {
     border: 1px solid var(--border);
     padding: .3em .6em;
 }
@@ -453,7 +469,8 @@ main { padding: 1rem; }
  * markdown-it emits column alignment as `style="text-align:…"`, which
  * `_sanitize_html` translates into the `align-*` classes below. */
 .line-content th,
-.presentation .slide th {
+.presentation .slide th,
+.standalone-document th {
     text-align: inherit;
     background: #f3f4f6;
     font-weight: 600;
@@ -472,21 +489,27 @@ main { padding: 1rem; }
 .line-content th.align-left,
 .line-content td.align-left,
 .presentation .slide th.align-left,
-.presentation .slide td.align-left {
+.presentation .slide td.align-left,
+.standalone-document th.align-left,
+.standalone-document td.align-left {
     text-align: left;
 }
 
 .line-content th.align-center,
 .line-content td.align-center,
 .presentation .slide th.align-center,
-.presentation .slide td.align-center {
+.presentation .slide td.align-center,
+.standalone-document th.align-center,
+.standalone-document td.align-center {
     text-align: center;
 }
 
 .line-content th.align-right,
 .line-content td.align-right,
 .presentation .slide th.align-right,
-.presentation .slide td.align-right {
+.presentation .slide td.align-right,
+.standalone-document th.align-right,
+.standalone-document td.align-right {
     text-align: right;
 }
 
@@ -761,6 +784,57 @@ body.presenting { overflow: hidden; }
     font-size: 30px;
 }
 .presentation .slide[hidden] { display: none; }
+
+/* The standalone page's two views (DR-6).  `display: flex` above outranks the
+ * user agent's [hidden] rule, so hiding the deck needs its own.  The toggle
+ * sits top-right, the corner the review app's exit control uses and the
+ * standalone page leaves empty, above the deck's z-index. */
+.presentation[hidden] { display: none; }
+
+.view-toggle {
+    position: fixed;
+    top: .75rem;
+    right: .75rem;
+    z-index: 101;
+    min-height: 44px;
+    padding: 0 1rem;
+    border: none;
+    border-radius: 22px;
+    color: #fff;
+    font: inherit;
+    font-size: .95rem;
+    cursor: pointer;
+    background: rgba(0, 0, 0, 0.5);
+}
+.view-toggle:hover,
+.view-toggle:focus { background: rgba(0, 0, 0, 0.8); outline: none; }
+
+.standalone-document {
+    max-width: 50rem;
+    margin: 0 auto;
+    padding: 4rem 1.25rem 3rem;
+    line-height: 1.6;
+}
+.standalone-document[hidden] { display: none; }
+/* Focused only so Space scrolls it; a ring round the whole page says nothing. */
+.standalone-document:focus { outline: none; }
+.standalone-document img { max-width: 100%; }
+.standalone-document > h1,
+.standalone-document > h2,
+.standalone-document > h3,
+.standalone-document > h4 {
+    margin: 1.6rem 0 .5rem;
+    line-height: 1.25;
+}
+.standalone-document > hr {
+    margin: 2rem 0;
+    border: none;
+    border-top: 1px solid var(--border);
+}
+.standalone-document > ul,
+.standalone-document > ol,
+.standalone-document > pre,
+.standalone-document > blockquote { margin-bottom: .8em; }
 
 .presentation .slide h1 { font-size: 2.4em; margin: 0 0 0.3em; }
 .presentation .slide h2 { font-size: 1.8em; margin: 0 0 0.3em; }
