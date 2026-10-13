@@ -101,26 +101,32 @@
         }
         var files = node._files || [];
         for (var f = 0; f < files.length; f++) {
-            var a = document.createElement("a");
-            a.href = "/view?path=" + encodeURIComponent(files[f].path);
-            a.className = "file-nav-link";
-            if (files[f].path === currentPath) a.className += " active";
-            a.textContent = files[f].name;
-            a.setAttribute("data-path", files[f].path);
-            container.appendChild(a);
+            container.appendChild(fileLink(files[f].path, files[f].name));
         }
     }
 
     function renderFilteredFlat(files) {
         for (var i = 0; i < files.length; i++) {
-            var a = document.createElement("a");
-            a.href = "/view?path=" + encodeURIComponent(files[i]);
-            a.className = "file-nav-link";
-            if (files[i] === currentPath) a.className += " active";
-            a.textContent = files[i];
-            a.setAttribute("data-path", files[i]);
-            navTreeEl.appendChild(a);
+            navTreeEl.appendChild(fileLink(files[i], files[i]));
         }
+    }
+
+    /* A PDF or image links to /download and carries no data-path, so the SPA
+     * click handler leaves it to the browser (DR-5). */
+    function fileLink(path, label) {
+        var a = document.createElement("a");
+        a.className = "file-nav-link";
+        a.textContent = label;
+        var logic = window.docReviewNavLogic;
+        if (logic && logic.isDownload(path)) {
+            a.href = logic.downloadUrl(path);
+            a.setAttribute("download", "");
+            return a;
+        }
+        a.href = "/view?path=" + encodeURIComponent(path);
+        if (path === currentPath) a.className += " active";
+        a.setAttribute("data-path", path);
+        return a;
     }
 
     var tree = buildTree(allFiles);

@@ -18,6 +18,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import (
+    FileResponse,
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
@@ -43,6 +44,8 @@ from db import (
 )
 from file_id import derive_file_id
 from renderer import (
+    DOWNLOAD_EXTS,
+    MARKDOWN_EXTS,
     extract_toc,
     normalized_offset,
     raw_offset,
@@ -198,12 +201,37 @@ def _resolve_file(rel_path: str) -> Path:
     return target
 
 
+def _is_download(rel_path: str) -> bool:
+    """Whether *rel_path* is offered at ``/download`` rather than ``/view``."""
+    return Path(rel_path).suffix.lower() in DOWNLOAD_EXTS
+
+
+templates.env.globals["is_download"] = _is_download
+
+
+def _resolve_typed_file(rel_path: str, exts: frozenset[str]) -> Path:
+    """Resolve *rel_path* like ``_resolve_file``, refusing other extensions.
+
+    A refused type answers 404, the same as a missing file: the server does
+    not serve it, so to a reader it is not there (DR-5).
+    """
+    target = _resolve_file(rel_path)
+    if target.suffix.lower() not in exts:
+        raise HTTPException(status_code=404, detail="File not found")
+    return target
+
+
 def _list_files(root: Path) -> list[str]:
-    """Recursively list markdown files under *root* as relative paths."""
-    exts = {".md", ".markdown"}
+    """Recursively list markdown and downloadable files under *root*."""
+    exts = MARKDOWN_EXTS | DOWNLOAD_EXTS
     files = []
     for p in sorted(root.rglob("*")):
-        if p.is_file() and p.suffix.lower() in exts:
+        # A symlink is judged by its target too, the way the routes judge it.
+        if (
+            p.is_file()
+            and p.suffix.lower() in exts
+            and p.resolve().suffix.lower() == p.suffix.lower()
+        ):
             files.append(str(p.relative_to(root)))
     return files
 
@@ -1037,7 +1065,7 @@ def build_view_payload(path: str) -> dict:
     Single source of truth shared by ``/view`` (server-side render) and
     ``/api/source`` (SPA soft navigation, #447) so the two cannot drift.
     """
-    file_path = _resolve_file(path)
+    file_path = _resolve_typed_file(path, MARKDOWN_EXTS)
     source = file_path.read_text(encoding="utf-8", errors="replace")
     # `path` is passed so links relative to this file resolve against its own
     # directory rather than against `/view`, where the browser sits.
@@ -1121,6 +1149,25 @@ async def view_file(request: Request, path: str = Query(...)):
     return resp
 
 
+@app.get("/download")
+async def download_file(path: str = Query(...)):
+    """Serve a PDF or image as an attachment (DR-5).
+
+    ``attachment`` rather than inline matters most for SVG, which can carry
+    script and would otherwise run on this origin.
+    """
+    target = _resolve_typed_file(path, DOWNLOAD_EXTS)
+    return FileResponse(
+        target,
+        filename=target.name,
+        content_disposition_type="attachment",
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "sandbox",
+        },
+    )
+
+
 @app.get("/api/source")
 async def api_source(path: str = Query(...)):
     """Return the raw source + TOC + comments for a file as JSON (#447).
@@ -1149,7 +1196,7 @@ async def add_comment(
     parent_id: int | None = Form(None),
 ):
     """Create a comment (or reply) and redirect back to the file view."""
-    target = _resolve_file(path)  # validate path is inside source root
+    target = _resolve_typed_file(path, MARKDOWN_EXTS)  # validate path is inside source root
     block_id, block_offset, block_context = _block_anchor_for_new_comment(
         target, line_start
     )
@@ -1181,7 +1228,7 @@ async def add_comment(
 
 @app.post("/comment/{comment_id}/resolve")
 async def resolve(comment_id: int, path: str = Form(...)):
-    _resolve_file(path)
+    _resolve_typed_file(path, MARKDOWN_EXTS)
     _reject_unusable_comment_id(comment_id)
     conn = _conn()
     try:
@@ -1193,7 +1240,7 @@ async def resolve(comment_id: int, path: str = Form(...)):
 
 @app.post("/comment/{comment_id}/unresolve")
 async def unresolve(comment_id: int, path: str = Form(...)):
-    _resolve_file(path)
+    _resolve_typed_file(path, MARKDOWN_EXTS)
     _reject_unusable_comment_id(comment_id)
     conn = _conn()
     try:
@@ -1215,7 +1262,7 @@ async def api_get_comments(path: str = Query(...)):
     the same placement ``/view`` shows, through the same code (#468).
     """
     # Validates the path is inside the source root, returns 403/404.
-    file_path = _resolve_file(path)
+    file_path = _resolve_typed_file(path, MARKDOWN_EXTS)
     source = file_path.read_text(encoding="utf-8", errors="replace")
     conn = _conn()
     try:
@@ -1247,7 +1294,7 @@ class _CommentCreate(BaseModel):
 @app.post("/api/comments", status_code=201)
 async def api_post_comment(payload: _CommentCreate, request: Request):
     """Create a comment from a JSON body, return the created comment as JSON."""
-    target = _resolve_file(payload.path)
+    target = _resolve_typed_file(payload.path, MARKDOWN_EXTS)
     block_id, block_offset, block_context = _block_anchor_for_new_comment(
         target, payload.line_start
     )
@@ -1287,7 +1334,7 @@ async def api_blame(path: str = Query(...)):
     Response: ``{"lines": [{"line": int, "commit": str, "author": str,
     "date": str, "content": str}, ...]}``
     """
-    target = _resolve_file(path)
+    target = _resolve_typed_file(path, MARKDOWN_EXTS)
     d = str(target.parent)
     name = target.name
     try:

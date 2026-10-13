@@ -205,6 +205,18 @@ for (var p = 0; p < ported.length; p++) {
         typeof nav[ported[p]], "undefined");
 }
 
+// ── Downloads (DR-5) ──
+// PDF and image files are listed in the nav but are not reviewable: they link
+// to /download, and the SPA must never soft-swap to them.
+assert("isDownload pdf", nav.isDownload("a/b.pdf"), true);
+assert("isDownload PNG upper", nav.isDownload("x.PNG"), true);
+assert("isDownload jpg", nav.isDownload("x.jpg"), true);
+assert("isDownload jpeg", nav.isDownload("x.jpeg"), true);
+assert("isDownload svg", nav.isDownload("x.svg"), true);
+assert("isDownload md", nav.isDownload("x.md"), false);
+assert("isDownload dotted dir", nav.isDownload("a.pdf/x.md"), false);
+assert("downloadUrl", nav.downloadUrl("a b/c.pdf"), "/download?path=a%20b%2Fc.pdf");
+
 // ── Report ──
 
 if (failures.length > 0) {

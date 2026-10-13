@@ -275,6 +275,11 @@ _COMMENTS_ONLY_RE = re.compile(rf"\A{_COMMENT}(?:\s*{_COMMENT})*\Z", re.DOTALL)
 # A scheme-qualified URI: `https:`, `mailto:`, `file:` (RFC 3986 §3.1).
 _URI_SCHEME_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*:")
 
+# What the server shows (DR-5).  Markdown is reviewed at `/view`; these are
+# offered at `/download` instead, and every other file is not served at all.
+MARKDOWN_EXTS = frozenset({".md", ".markdown"})
+DOWNLOAD_EXTS = frozenset({".pdf", ".jpg", ".jpeg", ".png", ".svg"})
+
 
 def _leaves_root(resolved: str) -> bool:
     """Whether a normalized target has climbed out of the served root.
@@ -333,6 +338,11 @@ def _resolve_doc_link(href: str, doc_path: str) -> str | None:
     # escapes a second time.  The fragment is encoded on the same terms rather
     # than passed through: this function builds a URL, so what can appear in it
     # is its own answer to give, not markdown-it's to be trusted for.
+    # `/view` refuses a PDF or an image, so the link offers it for download.
+    # A fragment means nothing to a downloaded file and is dropped.
+    if posixpath.splitext(resolved)[1].lower() in DOWNLOAD_EXTS:
+        return f"/download?path={quote(resolved, safe='/%')}"
+
     return (
         f"/view?path={quote(resolved, safe='/%')}"
         f"{sep}{quote(fragment, safe='/%')}"

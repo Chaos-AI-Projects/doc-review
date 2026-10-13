@@ -5,10 +5,14 @@
 {% if files %}
 <ul class="file-list">
     {% for f in files %}
+    {% if is_download(f) %}
+    <li><a href="/download?path={{ f | urlencode }}" download>{{ f }}</a></li>
+    {% else %}
     <li><a href="/view?path={{ f | urlencode }}">{{ f }}</a></li>
+    {% endif %}
     {% endfor %}
 </ul>
 {% else %}
-<p>No reviewable files found (markdown, org, or txt).</p>
+<p>No markdown, PDF or image files found.</p>
 {% endif %}
 {% endblock %}

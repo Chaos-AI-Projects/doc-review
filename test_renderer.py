@@ -661,6 +661,18 @@ def test_a_fragment_survives_the_rewrite():
     ]
 
 
+def test_a_link_to_a_pdf_or_image_resolves_to_download():
+    """DR-5: /view refuses these, so a link must offer the file for download."""
+    assert _hrefs("[p](../files/paper.pdf)\n", "kb/wiki/index.md") == [
+        "/download?path=kb/files/paper.pdf"
+    ]
+    assert _hrefs("[i](shot.PNG#x)\n", "drafts/a.md") == [
+        "/download?path=drafts/shot.PNG"
+    ]
+    for ext in ("jpg", "jpeg", "svg"):
+        assert _hrefs(f"[i](a.{ext})\n", "a.md") == [f"/download?path=a.{ext}"]
+
+
 def test_absolute_and_in_page_links_are_left_alone():
     """Only a relative path is ambiguous; everything else already resolves."""
     source = (

@@ -6,6 +6,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -103,6 +104,109 @@ class TestViewFile:
         resp = client.get("/view?path=test.md")
         assert resp.status_code == 200
         assert 'data-line-start="1"' in resp.text
+
+
+class TestDownloads:
+    """DR-5: only markdown is reviewable; PDF and images are offered for download."""
+
+    @pytest.fixture
+    def mixed_client(self, source_dir):
+        root = Path(source_dir)
+        (root / "paper.pdf").write_bytes(b"%PDF-1.4 fake")
+        (root / "sub" / "shot.PNG").write_bytes(b"\x89PNG fake")
+        (root / "pic.jpg").write_bytes(b"jpg")
+        (root / "pic2.jpeg").write_bytes(b"jpeg")
+        (root / "logo.svg").write_text("<svg/>")
+        (root / "notes.txt").write_text("plain text")
+        (root / "page.html").write_text("<p>hi</p>")
+        (root / "secret.env").write_text("TOKEN=x")
+        configure(source_dir, root / "test_comments.db")
+        return TestClient(app)
+
+    def test_index_links_downloads_and_skips_other_files(self, mixed_client):
+        text = mixed_client.get("/").text
+        for f in ("paper.pdf", "sub/shot.PNG", "pic.jpg", "pic2.jpeg", "logo.svg"):
+            assert f'href="/download?path={quote(f)}"' in text, f
+            assert f"/view?path={quote(f)}" not in text, f
+        for f in ("notes.txt", "page.html", "secret.env", "test_comments.db"):
+            assert f not in text, f
+        assert 'href="/view?path=test.md"' in text
+
+    def test_index_download_links_carry_download_attribute(self, mixed_client):
+        text = mixed_client.get("/").text
+        assert re.search(r'<a href="/download\?path=paper.pdf"[^>]*\bdownload\b', text)
+
+    def test_view_nav_data_includes_downloads(self, mixed_client):
+        text = mixed_client.get("/view?path=test.md").text
+        data = re.search(
+            r'<script id="files-data" type="application/json">(.*?)</script>',
+            text,
+            re.DOTALL,
+        ).group(1)
+        files = json.loads(data)
+        assert "paper.pdf" in files and "test.md" in files
+        assert "notes.txt" not in files and "page.html" not in files
+
+    def test_download_serves_attachment(self, mixed_client):
+        resp = mixed_client.get("/download?path=paper.pdf")
+        assert resp.status_code == 200
+        assert resp.content == b"%PDF-1.4 fake"
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.headers["content-disposition"].startswith("attachment")
+        assert "paper.pdf" in resp.headers["content-disposition"]
+
+    def test_download_svg_is_an_attachment_not_inline(self, mixed_client):
+        resp = mixed_client.get("/download?path=logo.svg")
+        assert resp.status_code == 200
+        assert resp.headers["content-disposition"].startswith("attachment")
+
+    def test_download_uppercase_extension(self, mixed_client):
+        assert mixed_client.get("/download?path=sub/shot.PNG").status_code == 200
+
+    @pytest.mark.parametrize(
+        "path", ["notes.txt", "page.html", "secret.env", "test.md", "test_comments.db"]
+    )
+    def test_download_refuses_other_files(self, mixed_client, path):
+        assert mixed_client.get(f"/download?path={path}").status_code == 404
+
+    def test_download_missing_file(self, mixed_client):
+        assert mixed_client.get("/download?path=nope.pdf").status_code == 404
+
+    def test_download_traversal_blocked(self, mixed_client, tmp_path):
+        assert mixed_client.get("/download?path=../../etc/passwd").status_code in (403, 404)
+
+    @pytest.mark.parametrize("path", ["notes.txt", "secret.env", "paper.pdf"])
+    def test_blame_and_comment_routes_refuse_non_markdown(self, mixed_client, path):
+        """Every route that reads a file is markdown-only, not just /view."""
+        c = mixed_client
+        assert c.get(f"/api/blame?path={path}").status_code == 404
+        assert c.get(f"/api/comments?path={path}").status_code == 404
+        form = {"file_id": "x", "path": path, "line_start": "1",
+                "line_end": "1", "body": "b"}
+        assert c.post("/comment", data=form, follow_redirects=False).status_code == 404
+        payload = {"file_id": "x", "path": path, "line_start": 1,
+                   "line_end": 1, "body": "b"}
+        assert c.post("/api/comments", json=payload).status_code == 404
+        assert c.post("/comment/1/resolve", data={"path": path}).status_code == 404
+        assert c.post("/comment/1/unresolve", data={"path": path}).status_code == 404
+
+    def test_a_symlink_is_listed_by_what_it_points_at(self, mixed_client, source_dir):
+        root = Path(source_dir)
+        (root / "alias.pdf").symlink_to(root / "secret.env")
+        (root / "alias.md").symlink_to(root / "paper.pdf")
+        text = mixed_client.get("/").text
+        assert "alias.pdf" not in text
+        assert "alias.md" not in text
+
+    def test_download_forbids_sniffing_and_scripts(self, mixed_client):
+        resp = mixed_client.get("/download?path=logo.svg")
+        assert resp.headers["x-content-type-options"] == "nosniff"
+        assert resp.headers["content-security-policy"] == "sandbox"
+
+    @pytest.mark.parametrize("path", ["paper.pdf", "notes.txt", "page.html"])
+    def test_view_refuses_non_markdown(self, mixed_client, path):
+        assert mixed_client.get(f"/view?path={path}").status_code == 404
+        assert mixed_client.get(f"/api/source?path={path}").status_code == 404
 
 
 class TestCommentFlow:

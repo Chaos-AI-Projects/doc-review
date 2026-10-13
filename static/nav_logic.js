@@ -12,6 +12,19 @@
         return "/view?path=" + encodeURIComponent(path);
     }
 
+    /* PDF and image files are listed but not reviewable (DR-5): they link to
+     * /download, and the SPA never soft-swaps to them.  Mirrors DOWNLOAD_EXTS
+     * in renderer.py. */
+    var DOWNLOAD_EXT_RE = /\.(pdf|jpe?g|png|svg)$/i;
+
+    function isDownload(path) {
+        return DOWNLOAD_EXT_RE.test(path || "");
+    }
+
+    function downloadUrl(path) {
+        return "/download?path=" + encodeURIComponent(path);
+    }
+
     function apiSourceUrl(path) {
         return "/api/source?path=" + encodeURIComponent(path);
     }
@@ -112,6 +125,8 @@
 
     var api = {
         viewUrl: viewUrl,
+        isDownload: isDownload,
+        downloadUrl: downloadUrl,
         apiSourceUrl: apiSourceUrl,
         shouldIntercept: shouldIntercept,
         popstateAction: popstateAction,
