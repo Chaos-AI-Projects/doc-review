@@ -413,6 +413,54 @@ class TestColumnToggles:
         assert 'class="col-toggles"' in resp.text
 
 
+class TestQuietHeader:
+    """DR-9: the file-id hash and the renderer status are debug info, so they
+    sit behind a closed disclosure instead of beside the toggle buttons."""
+
+    def _header(self, client):
+        resp = client.get("/view?path=test.md")
+        assert resp.status_code == 200
+        m = re.search(r'<div class="file-header">(.*?)\n</div>', resp.text, re.S)
+        assert m, "no .file-header block"
+        return m.group(1)
+
+    def _split(self, client):
+        header = self._header(client)
+        m = re.search(r'<details class="file-info"[^>]*>.*?</details>', header, re.S)
+        assert m, "no details.file-info disclosure in the header"
+        return m.group(0), header.replace(m.group(0), "")
+
+    def test_debug_info_lives_in_the_disclosure(self, client):
+        info, rest = self._split(client)
+        assert 'class="file-id"' in info
+        assert 'id="pyodide-status"' in info
+        assert 'class="file-id"' not in rest
+        assert 'id="pyodide-status"' not in rest
+
+    def test_disclosure_starts_closed(self, client):
+        info, _ = self._split(client)
+        opening = info.split(">", 1)[0]
+        assert not re.search(r"\bopen\b", opening), opening
+
+    def test_toggles_stay_in_the_header(self, client):
+        _, rest = self._split(client)
+        for el in ('class="col-toggles"', 'id="nav-toggle"', 'id="nav-col-toggle"',
+                   'id="comments-col-toggle"', 'id="present-toggle"'):
+            assert el in rest, el
+
+    def test_opening_the_panel_does_not_reflow_the_header(self, client):
+        css = client.get("/static/style.css").text
+        m = re.search(r"\.file-info-panel\s*\{([^}]+)\}", css)
+        assert m, "no .file-info-panel rule"
+        assert re.search(r"position:\s*absolute", m.group(1)), m.group(1)
+
+    def test_line_numbers_stay_hidden_by_default(self, client):
+        css = client.get("/static/style.css").text
+        m = re.search(r"(?m)^\.line-num\s*\{([^}]+)\}", css)
+        assert m, "no .line-num rule"
+        assert re.search(r"display:\s*none", m.group(1)), m.group(1)
+
+
 class TestTableOfContents:
     """Table of contents should appear when the document has headings."""
 

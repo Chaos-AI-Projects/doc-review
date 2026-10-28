@@ -3,7 +3,6 @@
 {% block content %}
 <div class="file-header">
     <h1>{{ header.title }}</h1>
-    <span class="file-id" title="file_id">{{ header.fileIdLabel }}</span>
     <button class="file-nav-toggle" id="nav-toggle" title="Toggle file navigator">&#9776; Files</button>
     <span class="col-toggles">
         <button id="nav-col-toggle" class="col-toggle-btn" title="Toggle navigator column">&#9776; Nav</button>
@@ -12,7 +11,15 @@
              until app.js confirms a warm renderer and a slide-shaped doc. -->
         <button id="present-toggle" class="col-toggle-btn" title="Present as slides (Esc returns to review)" hidden>&#9654; Present</button>
     </span>
-    <span id="pyodide-status" class="pyodide-status" title="Renderer loading…">&#9881;</span>
+    {# DR-9: the file id and the renderer status are debug info, so they sit
+       behind a closed disclosure rather than beside the toggles. #}
+    <details class="file-info">
+        <summary title="File info" aria-label="File info">&#9432;</summary>
+        <div class="file-info-panel">
+            <div>File id <span class="file-id" title="file_id">{{ header.fileIdLabel }}</span></div>
+            <div>Renderer <span id="pyodide-status" class="pyodide-status" title="Renderer loading…">loading…</span></div>
+        </div>
+    </details>
 </div>
 
 <div class="view-layout">
