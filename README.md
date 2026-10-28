@@ -326,8 +326,36 @@ An opening line.
 ## Back to the default layout
 ```
 
-Available layouts are `default`, `title`, `centered` and `quote`. An unrecognised name falls back to
-`default`.
+Available layouts:
+
+- `default`, `title`, `centered` and `quote`.
+- `section` is a divider: one large heading under a heavy rule.
+- `big-number` shows its heading as a large figure, with the text below as its caption.
+- `agenda` lays the slide's list out as a numbered two-column grid.
+- `two-column` puts a leading heading across the top and splits the rest into two columns.
+
+An unrecognised name falls back to `default`.
+
+A `two-column` slide breaks its columns at a `<!-- column -->` comment, which is dropped from the
+slide. Marp has no column syntax, and it starts a new slide at any ruler, `***` included, so the
+break is a comment that Marp itself does not display. Only the first break counts. Without one, the
+rows split in half and the left column takes the odd row. Elsewhere `<!-- column -->` is an ordinary
+comment. Keep a blank line between it and the `_class` directive: run together they form one block,
+which is then read as neither.
+
+```markdown
+<!-- _class: two-column -->
+
+## Before and after
+
+- slow
+- manual
+
+<!-- column -->
+
+- fast
+- automatic
+```
 
 A comment block is treated as a directive only when it is entirely HTML comment, every line inside
 those comments reads `key: value`, and at least one key is `class` or `_class`. An ordinary

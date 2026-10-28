@@ -32,9 +32,20 @@ PRESENTATION_THEMES = (
     "swiss-modern", "paper-ink", "dark-botanical", "vintage-editorial",
 )
 
-# Per-slide layouts presentation mode ships CSS for (#462).  Same rule as the
-# themes above: the name lands in a class attribute, so only ours may reach it.
-PRESENTATION_LAYOUTS = ("default", "title", "centered", "quote")
+# Per-slide layouts presentation mode ships CSS for (#462; the last four
+# DR-11).  Same rule as the themes above: the name lands in a class attribute,
+# so only ours may reach it.
+PRESENTATION_LAYOUTS = (
+    "default", "title", "centered", "quote",
+    "section", "big-number", "agenda", "two-column",
+)
+
+# The one layout that cuts its slide into regions (DR-11), and the comment
+# that marks its column break.  Marp has no column syntax, and it splits a
+# slide on any ruler, `***` included, so the break has to be something Marp
+# shows nobody: an HTML comment.
+_TWO_COLUMN = "two-column"
+_COLUMN_BREAK = "column"
 
 # The two Marp spellings of the layout directive.  They differ only in scope:
 # the leading underscore marks a "spot" directive, which applies to the slide
@@ -100,17 +111,67 @@ def toc_item_specs(toc):
     ]
 
 
-def _append_slide(slides, rows, layout):
-    """Append a slide unless it would be blank (leading/adjacent breaks)."""
-    if rows:
-        slides.append(
-            {
-                "index": len(slides),
-                "number": len(slides) + 1,
-                "layout": layout,
-                "rows": rows,
-            }
-        )
+def _is_column_break(block):
+    """Is *block* exactly ``<!-- column -->``?  Checked by ``type`` for the
+    reason ``comment_directives`` gives: a marker shown as code is content."""
+    if block.get("type") != "paragraph":
+        return False
+    bodies = _comment_bodies((block.get("raw") or "").strip())
+    return bodies is not None and [b.strip().lower() for b in bodies] == [
+        _COLUMN_BREAK
+    ]
+
+
+def _regions(entries):
+    """Cut a two-column slide's ``(block, spec)`` entries into regions.
+
+    A leading heading spans both columns.  The first column break splits the
+    rest and is dropped, as a delimiter; with no break the body splits in half,
+    the left column taking the odd row.  Returns the rows and the regions, each
+    region a ``start``/``end`` slice of those rows, so the rows themselves stay
+    the review rows verbatim.
+    """
+    rows = []
+    regions = []
+    if entries and entries[0][0].get("type") == "heading":
+        rows.append(entries[0][1])
+        regions.append({"name": "head", "start": 0, "end": 1})
+        entries = entries[1:]
+    cut = next((i for i, (b, _) in enumerate(entries) if _is_column_break(b)), None)
+    if cut is None:
+        half = (len(entries) + 1) // 2
+        left, right = entries[:half], entries[half:]
+    else:
+        left, right = entries[:cut], entries[cut + 1 :]
+    for name, part in (("left", left), ("right", right)):
+        start = len(rows)
+        rows.extend(spec for _, spec in part)
+        regions.append({"name": name, "start": start, "end": len(rows)})
+    return rows, regions
+
+
+def _append_slide(slides, entries, layout):
+    """Append a slide unless it would be blank (leading/adjacent breaks).
+
+    *entries* are ``(block, spec)`` pairs.  The block is needed only to find a
+    two-column slide's regions, and only once the slide's layout is known,
+    because a ``_class`` directive may sit anywhere on it.
+    """
+    if layout == _TWO_COLUMN:
+        rows, regions = _regions(entries)
+    else:
+        rows, regions = [spec for _, spec in entries], []
+    if not rows:  # also a two-column slide holding nothing but its break
+        return
+    slides.append(
+        {
+            "index": len(slides),
+            "number": len(slides) + 1,
+            "layout": layout,
+            "rows": rows,
+            "regions": regions,
+        }
+    )
 
 
 def _is_slide_break(block):
@@ -238,17 +299,18 @@ def slide_specs(blocks, comments_by_block=None):
     The breaks themselves are delimiters, and front matter and ``_class``
     directive blocks are metadata, so none of them becomes slide content.
     Dropping a block is safe; renumbering one is not, so nothing here touches
-    a line range.
+    a line range.  A ``two-column`` slide's column break is dropped the same
+    way, and its ``regions`` slice the rows rather than copying them (DR-11).
     """
     specs = source_row_specs(blocks, comments_by_block)
     slides = []
-    rows = []
+    entries = []
     spot = ""     # this slide only, cleared at every break
     global_ = ""  # carries forward until another `class:` replaces it
     for block, spec in zip(blocks or [], specs):
         if _is_slide_break(block):
-            _append_slide(slides, rows, _layout_name(spot or global_))
-            rows = []
+            _append_slide(slides, entries, _layout_name(spot or global_))
+            entries = []
             spot = ""
             continue
         if block.get("type") == "front_matter":
@@ -258,8 +320,8 @@ def slide_specs(blocks, comments_by_block=None):
             spot = directives.get(_SPOT_LAYOUT, spot)
             global_ = directives.get(_GLOBAL_LAYOUT, global_)
             continue
-        rows.append(spec)
-    _append_slide(slides, rows, _layout_name(spot or global_))
+        entries.append((block, spec))
+    _append_slide(slides, entries, _layout_name(spot or global_))
     return slides
 
 

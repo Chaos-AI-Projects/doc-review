@@ -874,3 +874,141 @@ class TestMermaidReachesTheDeck:
         assert len(deck_rows) == 2
         for row in deck_rows:
             assert row["html"] == review[row["id"]]["html"]
+
+
+# ── More layouts: section, big-number, agenda, two-column (DR-11) ──
+#
+# Three of the four are styling only, like the #462 set.  `two-column` also
+# needs the slide cut into regions: an optional heading across the top, then a
+# left and a right column.  Marp has no column syntax of its own, and a real
+# Marp deck splits a slide on ANY ruler (`***` included), so the column break
+# is an HTML comment, which Marp shows nobody.
+
+
+NEW_LAYOUTS = ("section", "big-number", "agenda", "two-column")
+
+TWO_COLUMN_DOC = "\n".join(
+    [
+        "---",                              # 1
+        "marp: true",                       # 2
+        "---",                              # 3
+        "",                                 # 4
+        "<!-- _class: two-column -->",      # 5
+        "",                                 # 6
+        "## Pros and cons",                 # 7
+        "",                                 # 8
+        "- fast",                           # 9
+        "- cheap",                          # 10
+        "",                                 # 11
+        "<!-- column -->",                  # 12
+        "",                                 # 13
+        "- fragile",                        # 14
+        "",                                 # 15
+        "A closing line.",                  # 16
+        "",                                 # 17
+        "---",                              # 18
+        "",                                 # 19
+        "# Plain slide",                    # 20
+        "",                                 # 21
+        "<!-- column -->",                  # 22
+        "",                                 # 23
+    ]
+)
+
+
+def _two_column(source):
+    """The first slide of *source*, with its regions as start-line lists."""
+    slide = slide_specs(render_markdown_blocks(source))[0]
+    return slide, {
+        region["name"]: [
+            row["startLine"] for row in slide["rows"][region["start"] : region["end"]]
+        ]
+        for region in slide["regions"]
+    }
+
+
+class TestMoreLayouts:
+    @pytest.mark.parametrize("layout", NEW_LAYOUTS)
+    def test_the_new_layouts_are_whitelisted(self, layout):
+        assert layout in PRESENTATION_LAYOUTS
+        source = "<!-- _class: %s -->\n\n# A\n" % layout
+        assert slide_specs(render_markdown_blocks(source))[0]["layout"] == layout
+
+    def test_an_ordinary_slide_has_no_regions(self, layout_blocks):
+        """Regions are opt-in: every other layout lays out exactly as before."""
+        assert all(s["regions"] == [] for s in slide_specs(layout_blocks))
+
+
+class TestTwoColumnRegions:
+    def test_the_marker_splits_the_columns_under_a_heading(self):
+        slide, regions = _two_column(TWO_COLUMN_DOC)
+        assert slide["layout"] == "two-column"
+        assert [r["name"] for r in slide["regions"]] == ["head", "left", "right"]
+        assert regions == {"head": [7], "left": [9], "right": [14, 16]}
+
+    def test_the_marker_is_a_delimiter_not_content(self):
+        slide, _ = _two_column(TWO_COLUMN_DOC)
+        assert 12 not in [row["startLine"] for row in slide["rows"]]
+
+    def test_the_regions_cover_every_row_once_in_order(self):
+        slide, _ = _two_column(TWO_COLUMN_DOC)
+        spans = [(r["start"], r["end"]) for r in slide["regions"]]
+        assert spans[0][0] == 0 and spans[-1][1] == len(slide["rows"])
+        assert all(a[1] == b[0] for a, b in zip(spans, spans[1:]))
+
+    def test_the_marker_on_any_other_slide_keeps_its_row(self):
+        """Elsewhere it is an ordinary comment, so it keeps its anchor."""
+        slides = slide_specs(render_markdown_blocks(TWO_COLUMN_DOC))
+        assert slides[1]["regions"] == []
+        assert 22 in [row["startLine"] for row in slides[1]["rows"]]
+
+    def test_no_heading_means_no_head_region(self):
+        source = "<!-- _class: two-column -->\n\nleft\n\n<!-- column -->\n\nright\n"
+        slide, regions = _two_column(source)
+        assert regions == {"left": [3], "right": [7]}
+
+    def test_without_a_marker_the_body_splits_in_half(self):
+        source = "<!-- _class: two-column -->\n\n# T\n\na\n\nb\n\nc\n"
+        _, regions = _two_column(source)
+        assert regions == {"head": [3], "left": [5, 7], "right": [9]}
+
+    def test_only_the_first_marker_splits(self):
+        source = (
+            "<!-- _class: two-column -->\n\na\n\n<!-- column -->\n\nb\n\n"
+            "<!-- column -->\n\nc\n"
+        )
+        _, regions = _two_column(source)
+        assert regions == {"left": [3], "right": [7, 9, 11]}
+
+    def test_a_ruler_is_not_a_column_break(self):
+        """Real Marp would cut the slide at `***`; here it stays a visible hr."""
+        source = "<!-- _class: two-column -->\n\na\n\n***\n\nb\n\nc\n"
+        _, regions = _two_column(source)
+        assert regions == {"left": [3, 5], "right": [7, 9]}
+
+    def test_a_marker_shown_as_code_is_content(self):
+        source = "<!-- _class: two-column -->\n\na\n\n    <!-- column -->\n\nb\n"
+        slide, regions = _two_column(source)
+        assert 5 in [row["startLine"] for row in slide["rows"]]
+        assert regions == {"left": [3, 5], "right": [7]}
+
+    def test_a_marker_with_prose_is_content(self):
+        source = "<!-- _class: two-column -->\n\na\n\n<!-- column --> more\n\nb\n"
+        slide, _ = _two_column(source)
+        assert 5 in [row["startLine"] for row in slide["rows"]]
+
+    def test_rows_are_still_the_review_rows_verbatim(self):
+        blocks = render_markdown_blocks(TWO_COLUMN_DOC)
+        review = {row["id"]: row for row in source_row_specs(blocks)}
+        for row in _rows(slide_specs(blocks)):
+            assert row == review[row["id"]]
+
+    def test_regions_survive_the_bridge(self):
+        blocks = render_markdown_blocks(TWO_COLUMN_DOC)
+        via = TestPyodideBridgeContract._via_bridge(slide_specs, [blocks, None])
+        assert via == slide_specs(blocks)
+
+    def test_a_slide_of_only_a_marker_is_not_a_blank_slide(self):
+        source = "<!-- _class: two-column -->\n\n<!-- column -->\n\n---\n\n# B\n"
+        slides = slide_specs(render_markdown_blocks(source))
+        assert [s["rows"][0]["startLine"] for s in slides] == [7]

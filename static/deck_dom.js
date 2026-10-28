@@ -108,15 +108,31 @@
             section.className = "slide layout-" + slide.layout;
             section.setAttribute("data-slide", slide.index);
 
-            for (var j = 0; j < slide.rows.length; j++) {
-                var row = slide.rows[j];
-                var blockEl = doc.createElement("div");
-                blockEl.className = "slide-block";
-                // The review-mode anchor, carried onto the slide: same block,
-                // same line range, whichever mode you are looking at.
-                setLineAttrs(blockEl, row);
-                blockEl.innerHTML = row.html;
-                section.appendChild(blockEl);
+            // A two-column slide arrives cut into regions (DR-11), each a
+            // start/end slice of its rows; any other slide is one region
+            // holding every row, mounted straight on the section.  Which
+            // slides get regions is view_specs' decision, not this file's.
+            var regions = slide.regions && slide.regions.length
+                ? slide.regions
+                : [{ name: null, start: 0, end: slide.rows.length }];
+            for (var r = 0; r < regions.length; r++) {
+                var region = regions[r];
+                var parent = section;
+                if (region.name) {
+                    parent = doc.createElement("div");
+                    parent.className = "slide-region region-" + region.name;
+                    section.appendChild(parent);
+                }
+                for (var j = region.start; j < region.end; j++) {
+                    var row = slide.rows[j];
+                    var blockEl = doc.createElement("div");
+                    blockEl.className = "slide-block";
+                    // The review-mode anchor, carried onto the slide: same
+                    // block, same line range, whichever mode you are in.
+                    setLineAttrs(blockEl, row);
+                    blockEl.innerHTML = row.html;
+                    parent.appendChild(blockEl);
+                }
             }
 
             if (specs.paginate) {

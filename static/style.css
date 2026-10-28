@@ -1045,6 +1045,92 @@ body.presenting { overflow: hidden; }
     padding-left: 0.8em;
 }
 
+/* Section divider (DR-11): one large heading under a heavy rule, marking a
+ * new part of the talk.  Left-aligned, so it reads as a divider and not as a
+ * second title slide.
+ *
+ * `[class*="theme-"]` matches every deck root, default included.  It lifts
+ * these heading rules one step above the named themes' `.slide h1` sizes,
+ * which would otherwise tie and win by coming later in the file.  The size
+ * is the whole point of this layout and the next, so it must not depend on
+ * source order.  The bottom border and padding undo paper-ink's h1 rule. */
+.presentation[class*="theme-"] .slide.layout-section h1,
+.presentation[class*="theme-"] .slide.layout-section h2 {
+    font-size: 4em;
+    line-height: 1.1;
+    padding-top: 0.25em;
+    padding-bottom: 0;
+    border-top: 12px solid var(--quote-rule);
+    border-bottom: none;
+}
+.presentation .slide.layout-section p { font-size: 1.3em; color: var(--text-quote); }
+
+/* Big number (DR-11): the heading is the figure, the text under it the
+ * caption.  Tabular figures keep a changing number from shifting sideways. */
+.presentation .slide.layout-big-number { text-align: center; align-items: center; align-items: safe center; }
+.presentation[class*="theme-"] .slide.layout-big-number h1,
+.presentation[class*="theme-"] .slide.layout-big-number h2 {
+    font-size: 9em;
+    line-height: 1;
+    margin: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+    font-variant-numeric: tabular-nums;
+}
+.presentation .slide.layout-big-number p { font-size: 1.5em; color: var(--text-quote); }
+
+/* Agenda (DR-11): the slide's list becomes a numbered two-column grid of
+ * items.  The counter numbers ordered and unordered lists alike.  Only the
+ * top-level list: a nested one stays an ordinary list inside its item. */
+.presentation .slide.layout-agenda .slide-block > ol,
+.presentation .slide.layout-agenda .slide-block > ul {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 32px 64px;
+    list-style: none;
+    padding: 0;
+    counter-reset: agenda;
+}
+.presentation .slide.layout-agenda .slide-block > ol > li,
+.presentation .slide.layout-agenda .slide-block > ul > li {
+    counter-increment: agenda;
+    margin: 0;
+    padding-top: 0.4em;
+    border-top: 4px solid var(--quote-rule);
+    font-size: 1.2em;
+}
+.presentation .slide.layout-agenda .slide-block > ol > li::before,
+.presentation .slide.layout-agenda .slide-block > ul > li::before {
+    content: counter(agenda, decimal-leading-zero);
+    display: block;
+    font-size: 1.4em;
+    font-weight: 700;
+    color: var(--text-quote);
+}
+
+/* Two columns (DR-11).  view_specs cuts the slide into a heading across the
+ * top and a left and a right column, and deck_dom.js mounts each as a
+ * .slide-region.  `:not([hidden])` because this rule and `.slide[hidden]`
+ * have the same specificity, and this one comes later: without it every
+ * two-column slide would show at once. */
+.presentation .slide.layout-two-column:not([hidden]) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 80px;
+    row-gap: 20px;
+    align-content: center;
+    align-content: safe center;
+}
+.presentation .slide .slide-region {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    min-width: 0;
+}
+.presentation .slide .region-head { grid-column: 1 / -1; }
+.presentation .slide .region-left,
+.presentation .slide .region-right { align-self: start; }
+
 /* Front matter shown as metadata rather than a bogus setext heading (#452). */
 pre.front-matter {
     background: var(--pre-bg);

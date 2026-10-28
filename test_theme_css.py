@@ -183,10 +183,65 @@ class TestSlideFit:
         for sel, body in rules(CSS):
             if not re.search(r"\.slide(?![-\w])", sel):
                 continue
-            for prop in ("justify-content", "align-items"):
+            # align-content: a two-column slide is a grid (DR-11), whose rows
+            # centre on that axis instead.
+            for prop in ("justify-content", "align-items", "align-content"):
                 # The last declaration wins; a plain `center` before it is
                 # the fallback for a browser that rejects `safe`.
                 values = re.findall(prop + r"\s*:\s*([^;]+);", body)
                 if values and "center" in values[-1] and "safe" not in values[-1]:
                     offenders.append((sel, prop))
         assert offenders == []
+
+
+class TestLayoutDisplay:
+    def test_a_layout_that_sets_display_still_hides_a_hidden_slide(self):
+        """DR-11: `.presentation .slide.layout-X { display: grid }` has the
+        same specificity as `.presentation .slide[hidden] { display: none }`
+        and comes later, so it would show every slide of that layout at once.
+        Such a rule must exclude hidden slides itself."""
+        on_the_slide = re.compile(r"\.slide\.layout-[\w-]+(?P<guard>:not\(\[hidden\]\))?$")
+        offenders = [
+            part.strip()
+            for sel, body in rules(CSS)
+            if re.search(r"(^|[;\s])display\s*:", body)
+            for part in sel.split(",")
+            if (m := on_the_slide.search(part.strip())) and not m.group("guard")
+        ]
+        assert offenders == []
+
+    @pytest.mark.parametrize("region", ["head", "left", "right"])
+    def test_every_region_is_styled(self, region):
+        """The region names view_specs emits for a two-column slide."""
+        assert any(
+            ".region-%s" % region in sel and body.strip() for sel, body in rules(CSS)
+        )
+
+
+def _specificity(selector):
+    """(classes + attributes + pseudo-classes, elements) of one selector."""
+    sel = re.sub(r"::[\w-]+", "", selector)
+    classes = len(re.findall(r"\.[\w-]+|\[[^\]]*\]|:(?!not\b)[\w-]+", sel))
+    elements = len(re.findall(r"(?:^|[\s>+~(])([a-z][\w-]*)", sel))
+    return classes, elements
+
+
+class TestLayoutHeadingSize:
+    @pytest.mark.parametrize("layout", ["section", "big-number"])
+    def test_the_layout_heading_size_beats_every_theme(self, layout):
+        """DR-11 review: four named themes size `.slide h1` at the same
+        specificity as a layout rule, later in the file, so a big-number
+        figure came out at the theme's 3em instead of its own 9em."""
+        def sizing(pattern):
+            return [
+                _specificity(part.strip())
+                for sel, body in rules(CSS)
+                if re.search(r"font-size\s*:", body)
+                for part in sel.split(",")
+                if re.search(pattern, part.strip())
+            ]
+
+        theirs = sizing(r"\.theme-[\w-]+ \.slide h1$")
+        ours = sizing(r"\.slide\.layout-%s h1$" % layout)
+        assert theirs and ours
+        assert min(ours) > max(theirs)

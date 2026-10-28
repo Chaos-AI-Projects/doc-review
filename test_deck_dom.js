@@ -455,6 +455,53 @@ function stubDeck(slides) {
     deckDom.watchFit(fakeDocument, stubDeck([]));
 })();
 
+// 14. A slide with regions (DR-11, two-column) nests each row in the region
+//     whose start/end slice holds it, in order.  The region names are
+//     view_specs' own, so nothing here inspects the layout.  A slide with no
+//     regions keeps its rows directly under the section, as before.
+(function () {
+    var deck = deckDom.buildDeck(fakeDocument, specs({
+        slides: [
+            { index: 0, number: 1, layout: "two-column",
+              rows: [row("<h2>T</h2>", 1, 1), row("<p>a</p>", 3, 3),
+                     row("<p>b</p>", 7, 7), row("<p>c</p>", 9, 9)],
+              regions: [{ name: "head", start: 0, end: 1 },
+                        { name: "left", start: 1, end: 2 },
+                        { name: "right", start: 2, end: 4 }] },
+            { index: 1, number: 2, layout: "default",
+              rows: [row("<p>d</p>", 11, 11)], regions: [] },
+        ],
+    }));
+    var sections = deck.querySelectorAll("section.slide");
+    var regions = sections[0].children.filter(function (c) {
+        return c.tag === "div" && /\bslide-region\b/.test(c.className);
+    });
+    assertDeep("regions: one div per region, named by the spec",
+        regions.map(function (r) { return r.className; }),
+        ["slide-region region-head", "slide-region region-left",
+         "slide-region region-right"]);
+    assertDeep("regions: each holds its slice of the rows",
+        regions.map(function (r) {
+            return r.children.map(function (b) { return b.innerHTML; });
+        }),
+        [["<h2>T</h2>"], ["<p>a</p>"], ["<p>b</p>", "<p>c</p>"]]);
+    assert("regions: blocks keep their anchor",
+        regions[2] && regions[2].children[1].getAttribute("data-line-start"), "9");
+    assert("regions: no block left directly on the slide",
+        sections[0].children.filter(function (c) {
+            return c.className === "slide-block";
+        }).length, 0);
+    assert("regions: a plain slide keeps its blocks on the section",
+        sections[1].children[0].className, "slide-block");
+})();
+
+// 15. Specs from before DR-11 carry no `regions` key at all, and still build.
+(function () {
+    var deck = deckDom.buildDeck(fakeDocument, specs());
+    assert("regions: absent key builds flat",
+        deck.querySelectorAll("section.slide")[1].children[0].className, "slide-block");
+})();
+
 if (failures.length) {
     console.error("FAIL (" + failures.length + "):");
     failures.forEach(function (f) { console.error("  - " + f); });
