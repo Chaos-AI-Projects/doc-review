@@ -1593,6 +1593,63 @@ class TestGetApiComments:
 class TestPostApiComments:
     """POST /api/comments accepts JSON, creates comment, returns JSON (#435)."""
 
+    def _post(self, client, source_dir, **extra):
+        from file_id import derive_file_id
+
+        fid = derive_file_id(str(Path(source_dir) / "test.md"))
+        body = {"file_id": fid, "path": "test.md", "line_start": 3,
+                "line_end": 3, "body": "on a span"}
+        body.update(extra)
+        return client.post("/api/comments", json=body)
+
+    def test_quote_round_trips_through_the_api(self, client, source_dir):
+        """DR-7: the selected span is stored and listed with the comment."""
+        resp = self._post(client, source_dir, quote="a test file")
+        assert resp.status_code == 201
+        assert resp.json()["quote"] == "a test file"
+        listed = client.get("/api/comments?path=test.md").json()
+        assert [c["quote"] for c in listed] == ["a test file"]
+
+    def test_blank_quote_means_block_anchored(self, client, source_dir):
+        assert self._post(client, source_dir, quote="  \n ").json()["quote"] is None
+        assert self._post(client, source_dir).json()["quote"] is None
+
+    def test_overlong_quote_is_refused(self, client, source_dir):
+        assert self._post(client, source_dir, quote="x" * 2001).status_code == 422
+
+    def test_form_route_stores_the_quote(self, client, source_dir):
+        from file_id import derive_file_id
+
+        fid = derive_file_id(str(Path(source_dir) / "test.md"))
+        resp = client.post(
+            "/comment",
+            data={"file_id": fid, "path": "test.md", "line_start": 3,
+                  "line_end": 3, "body": "form span", "quote": "test file"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        listed = client.get("/api/comments?path=test.md").json()
+        assert [c["quote"] for c in listed] == ["test file"]
+
+    def test_view_page_carries_the_quote_to_the_client(self, client, source_dir):
+        """DR-7: the form has a quote field, quote_mark.js loads before the
+        app.js that uses it, and the embedded comment data holds the quote
+        app.js highlights."""
+        import json
+
+        self._post(client, source_dir, quote="a test file")
+        html = client.get("/view?path=test.md").text
+        assert '<input type="hidden" name="quote" value="">' in html
+        assert html.index("/static/quote_mark.js") < html.index("/static/app.js")
+        data = json.loads(re.search(
+            r'id="comments-data"[^>]*>(.*?)</script>', html, re.DOTALL
+        ).group(1))
+        quotes = [c.get("quote") for cs in data.values() for c in cs]
+        assert quotes == ["a test file"]
+        # The Pyodide loop overwrites the server render, so it must re-mark.
+        tail = html[html.index("cell.innerHTML = block.html"):]
+        assert "docReviewMarkQuotes" in tail[:600]
+
     def test_create_comment_returns_json(self, client, source_dir):
         from file_id import derive_file_id
 

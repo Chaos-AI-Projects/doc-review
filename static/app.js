@@ -11,6 +11,7 @@
     var formTpl = document.getElementById("comment-form-tpl");
     var isMobile = window.matchMedia("(max-width: 768px)").matches;
     var presenting = false;  // presentation mode is read-only (#452)
+    var quoteLogic = window.docReviewQuote;  // selection anchors (DR-7)
 
     /* ── File navigator toggle (mobile) ── */
 
@@ -186,6 +187,11 @@
             escapeHtml(c.created_at.slice(0, 16)) +
             (c.resolved ? " &middot; <em>resolved</em>" : "") +
             "</div>";
+        if (c.quote) {
+            // DR-7: the span this comment is about, not just its block.
+            html += '<blockquote class="comment-quote-text">' +
+                escapeHtml(c.quote) + "</blockquote>";
+        }
         html += '<div class="comment-body">' + escapeHtml(c.body) + "</div>";
         html += '<div class="comment-actions">';
         if (!c.resolved) {
@@ -216,9 +222,46 @@
         return new URLSearchParams(window.location.search).get("path") || "";
     }
 
+    /* The comment form for one block.  `quote` is the selected span the new
+     * comment anchors to, or "" for the whole block (DR-7). */
+    function commentFormHtml(startLine, endLine, quote) {
+        var frag = formTpl.content.cloneNode(true);
+        var form = frag.querySelector("form");
+        form.querySelector('[name="line_start"]').value = startLine;
+        form.querySelector('[name="line_end"]').value = endLine;
+        var quoteInput = form.querySelector('[name="quote"]');
+        if (quoteInput) quoteInput.setAttribute("value", quote || "");
+        var preview = form.querySelector(".comment-quote-preview");
+        if (preview && quote) {
+            preview.textContent = quote;
+            preview.removeAttribute("hidden");
+        }
+        var tmp = document.createElement("div");
+        tmp.appendChild(frag);
+        return tmp.innerHTML;
+    }
+
+    /* Highlight every open comment's quoted span.  Called after each render
+     * that replaces block HTML: the server's, the Pyodide re-render that
+     * overwrites it, and a soft swap (the double-render trap). */
+    function markAllQuotes() {
+        if (!quoteLogic) return;
+        var rows = document.querySelectorAll("#source tr.source-line");
+        for (var i = 0; i < rows.length; i++) {
+            var cell = rows[i].querySelector(".line-content");
+            if (!cell) continue;
+            var key = rows[i].getAttribute("data-line-start");
+            quoteLogic.markQuotes(
+                cell, quoteLogic.quotesForBlock(commentsData[key]), document
+            );
+        }
+    }
+    window.docReviewMarkQuotes = markAllQuotes;
+    markAllQuotes();
+
     /* ── Show comments for a block in the sidebar ── */
 
-    function showBlockComments(startLine, endLine) {
+    function showBlockComments(startLine, endLine, quote) {
         var comments = commentsData[String(startLine)] || [];
         var label = startLine === endLine
             ? "Line " + startLine
@@ -227,14 +270,7 @@
         for (var i = 0; i < comments.length; i++) {
             html += commentCardHtml(comments[i]);
         }
-
-        var frag = formTpl.content.cloneNode(true);
-        var form = frag.querySelector("form");
-        form.querySelector('[name="line_start"]').value = startLine;
-        form.querySelector('[name="line_end"]').value = endLine;
-        var tmp = document.createElement("div");
-        tmp.appendChild(frag);
-        html += tmp.innerHTML;
+        html += commentFormHtml(startLine, endLine, quote);
 
         sidebar.innerHTML = html;
 
@@ -255,7 +291,7 @@
 
     /* ── Mobile: toggle inline comment panel under the block ── */
 
-    function showBlockCommentsMobile(startLine, endLine) {
+    function showBlockCommentsMobile(startLine, endLine, quote) {
         document.querySelectorAll(".inline-comments").forEach(function (el) {
             el.remove();
         });
@@ -268,13 +304,7 @@
         for (var i = 0; i < comments.length; i++) {
             html += commentCardHtml(comments[i]);
         }
-        var frag = formTpl.content.cloneNode(true);
-        var form = frag.querySelector("form");
-        form.querySelector('[name="line_start"]').value = startLine;
-        form.querySelector('[name="line_end"]').value = endLine;
-        var tmp = document.createElement("div");
-        tmp.appendChild(frag);
-        html += tmp.innerHTML;
+        html += commentFormHtml(startLine, endLine, quote);
 
         var panel = document.createElement("tr");
         panel.className = "inline-comments";
@@ -307,10 +337,16 @@
         }
 
         if (startLine && endLine) {
+            // Text selected inside the clicked block becomes the anchor
+            // (DR-7); a marker or line-number click is always the whole block.
+            var quote = "";
+            if (contentEl && quoteLogic && window.getSelection) {
+                quote = quoteLogic.selectionQuote(window.getSelection(), contentEl);
+            }
             if (isMobile) {
-                showBlockCommentsMobile(startLine, endLine);
+                showBlockCommentsMobile(startLine, endLine, quote);
             } else {
-                showBlockComments(startLine, endLine);
+                showBlockComments(startLine, endLine, quote);
             }
         }
     });
@@ -470,6 +506,7 @@
         updateHeader(renderer, data);
         sourceBody.innerHTML = "";
         sourceBody.appendChild(buildSourceRows(renderer, blocks));
+        markAllQuotes();
         renderToc(renderer, data.toc);
         updateNavActive();
         document.querySelectorAll(".inline-comments").forEach(function (el) {

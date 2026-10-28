@@ -169,7 +169,7 @@ curl 'http://127.0.0.1:28080/api/comments?path=notes/design.md'
 
 Each entry carries `id`, `file_id`, `file_path`, `line_start`, `line_end`, `author`, `body`,
 `parent_id`, `resolved`, `created_at`, `updated_at`, `detached`, and the anchoring fields
-`block_id`, `block_offset`, `block_context` and `anchor_commit`. The line numbers are where the
+`block_id`, `block_offset`, `block_context`, `anchor_commit` and `quote`. The line numbers are where the
 comment sits in the file as it is on disk now, not where it was written. See
 [Render and review](#render-and-review) for what `detached` does and does not mean.
 
@@ -185,6 +185,11 @@ curl -X POST http://127.0.0.1:28080/api/comments \
 
 `file_id` comes from `GET /api/source`. Pass `parent_id` to reply to a specific comment; leave it
 out and the server threads the new comment onto whatever its block already carries.
+
+Pass `quote` to anchor the comment to a span inside its block rather than the whole block. The
+web UI fills it from the text selected when the block is clicked, and highlights it on render. On a
+phone the tap usually clears the selection first, so the comment lands on the whole block. A
+blank `quote` means the whole block, and one over 2000 characters is refused with `422`.
 
 `comments_cli.py` wraps the two comment routes so a script does not have to build the JSON itself:
 
@@ -410,7 +415,8 @@ doc-review/
 │   ├── app.js         # Comment interaction + presentation mode
 │   ├── nav_logic.js   # Navigation, key mapping and fullscreen decisions,
 │   │                  # kept pure so they can be tested without a browser
-│   └── mermaid_init.js # Mermaid container walk, shared by review and deck
+│   ├── mermaid_init.js # Mermaid container walk, shared by review and deck
+│   └── quote_mark.js  # Selection-anchored comments: match and highlight a quote
 ├── test_db.py         # Data layer tests
 ├── test_file_id.py    # File ID derivation tests
 ├── test_renderer.py   # Renderer tests
@@ -423,6 +429,7 @@ doc-review/
 ├── test_spa_nav.js    # Soft-navigation tests (node)
 ├── test_tree_collapse.js # File-tree collapse tests (node)
 ├── test_mermaid_init.js # Mermaid rendering tests (node)
+├── test_quote_mark.js # Selection-anchor tests (node)
 └── README.md          # This file
 ```
 

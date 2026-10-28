@@ -76,6 +76,10 @@
         <input type="hidden" name="path" value="{{ header.formPath }}">
         <input type="hidden" name="line_start" value="">
         <input type="hidden" name="line_end" value="">
+        {# DR-7: the text selected inside the block, filled by app.js.  Blank
+           means the comment is on the whole block. #}
+        <input type="hidden" name="quote" value="">
+        <blockquote class="comment-quote-preview" hidden></blockquote>
         {# No parent_id field: the server threads a new comment onto whatever
            its block already carries (#465 Phase 2).  This was a hardcoded
            value="0", which is why no comment posted from the web UI was ever
@@ -103,6 +107,7 @@
 <script src="/static/nav_logic.js?v={{ static_version('nav_logic.js') }}"></script>
 <script src="/static/deck_dom.js?v={{ static_version('deck_dom.js') }}"></script>
 <script src="/static/mermaid_init.js?v={{ static_version('mermaid_init.js') }}"></script>
+<script src="/static/quote_mark.js?v={{ static_version('quote_mark.js') }}"></script>
 <script src="/static/app.js?v={{ static_version('app.js') }}"></script>
 <script type="module">
 // ── Mermaid diagram rendering (reusable for re-render after Pyodide) ──
@@ -228,6 +233,9 @@ async function initPyodideRenderer() {
                 if (cell) cell.innerHTML = block.html;
             }
         }
+        // The loop above threw away the server render's quote highlights
+        // (DR-7), so put them back on the new HTML.
+        if (window.docReviewMarkQuotes) window.docReviewMarkQuotes();
 
         // Re-initialize mermaid on Pyodide-rendered content
         await initMermaid();

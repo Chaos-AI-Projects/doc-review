@@ -253,6 +253,32 @@ class TestCliListDetachedTag:
         header = out.splitlines()[0]
         assert header == "#1 alice L5 [DETACHED] (reply)  2026-01-01T00:00"
 
+    def test_a_span_anchored_comment_prints_its_quote(self, monkeypatch, capsys):
+        """DR-7: the quoted span is what the comment is about.
+
+        This text output is the surface agents read, so a quote that only
+        reached --json would leave an agent guessing which part of a long
+        block the comment means.
+        """
+        out = self._render(
+            monkeypatch, capsys,
+            [self._comment(quote="the old name", body="rename this")],
+        )
+        assert out.splitlines()[:3] == [
+            "#1 alice L5  2026-01-01T00:00",
+            "  > the old name",
+            "  rename this",
+        ]
+
+    def test_a_block_comment_prints_no_quote_line(self, monkeypatch, capsys):
+        out = self._render(
+            monkeypatch, capsys, [self._comment(quote=None)]
+        )
+        assert out.splitlines()[:2] == [
+            "#1 alice L5  2026-01-01T00:00",
+            "  a note",
+        ]
+
     def test_a_comment_the_server_detached_is_tagged_end_to_end(
         self, server_url, source_dir
     ):

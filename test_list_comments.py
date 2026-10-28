@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from db import create_comment, get_connection, init_db
-from list_comments import collect_comments
+from list_comments import collect_comments, format_text
 
 
 def _run_git(repo, *args):
@@ -309,6 +309,60 @@ class TestJsonOutput:
                       "current_line_start", "current_line_end",
                       "original_commit", "file_id"):
             assert field in c, f"Missing field: {field}"
+
+
+class TestQuote:
+    """DR-7: a span-anchored comment carries its quote through both paths."""
+
+    def _doc(self, temp_repo):
+        doc = temp_repo / "doc.md"
+        doc.write_text("line1\nline2\n")
+        _run_git(temp_repo, "add", "doc.md")
+        _run_git(temp_repo, "commit", "-m", "add doc")
+        return doc
+
+    def test_fast_path_carries_quote(self, temp_repo, temp_db):
+        db_path, conn = temp_db
+        doc = self._doc(temp_repo)
+        create_comment(conn, file_id=_blob_id(temp_repo, doc), line_start=1,
+                       line_end=1, author="a", body="b", file_path="doc.md",
+                       quote="line1")
+        results = collect_comments(
+            file_path=str(doc), repo=str(temp_repo), db_path=str(db_path)
+        )
+        assert results[0]["quote"] == "line1"
+
+    def test_legacy_path_carries_quote(self, temp_repo, temp_db):
+        db_path, conn = temp_db
+        doc = self._doc(temp_repo)
+        create_comment(conn, file_id=_blob_id(temp_repo, doc), line_start=1,
+                       line_end=1, author="a", body="b", quote="line1")
+        results = collect_comments(
+            file_path=str(doc), repo=str(temp_repo), db_path=str(db_path)
+        )
+        assert results[0]["quote"] == "line1"
+
+    def test_block_comment_has_null_quote(self, temp_repo, temp_db):
+        db_path, conn = temp_db
+        doc = self._doc(temp_repo)
+        create_comment(conn, file_id=_blob_id(temp_repo, doc), line_start=1,
+                       line_end=1, author="a", body="b")
+        results = collect_comments(
+            file_path=str(doc), repo=str(temp_repo), db_path=str(db_path)
+        )
+        assert results[0]["quote"] is None
+
+    def test_text_output_prints_quote(self):
+        results = [{
+            "id": 3, "author": "a", "body": "rename this", "resolved": 0,
+            "status": "current", "original_commit": None,
+            "original_line_start": 1, "original_line_end": 1,
+            "current_line_start": 1, "current_line_end": 1,
+            "quote": "the old name",
+        }]
+        lines = format_text(results, "doc.md").splitlines()
+        i = lines.index("  #3 by a")
+        assert lines[i + 1:i + 3] == ["    > the old name", "    rename this"]
 
 
 class TestFilePathFastPath:

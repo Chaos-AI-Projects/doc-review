@@ -489,6 +489,28 @@ def _block_anchor_for_new_comment(
     return block["block_id"], offset, block["block_context"]
 
 
+# A selection is a phrase or a few sentences.  Anything longer is a client bug
+# or a paste, and storing it would bloat every listing of the file.
+MAX_QUOTE_CHARS = 2000
+
+
+def _quote_for_new_comment(raw: str | None) -> str | None:
+    """The selected span a comment is anchored to, or None for the whole block.
+
+    DR-7.  A blank selection is no selection: the comment falls back to its
+    block, exactly as every comment written before DR-7 does.
+    """
+    if raw is None or not raw.strip():
+        return None
+    text = raw.strip()
+    if len(text) > MAX_QUOTE_CHARS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"quote is longer than {MAX_QUOTE_CHARS} characters",
+        )
+    return text
+
+
 def _fits_sqlite_integer(value: int) -> bool:
     """Whether *value* can be compared against a stored id at all.
 
@@ -1194,9 +1216,12 @@ async def add_comment(
     author: str = Form("anon"),
     body: str = Form(...),
     parent_id: int | None = Form(None),
+    # Not named ``quote``: that would shadow urllib's quote() in the redirect.
+    selected: str | None = Form(None, alias="quote"),
 ):
     """Create a comment (or reply) and redirect back to the file view."""
     target = _resolve_typed_file(path, MARKDOWN_EXTS)  # validate path is inside source root
+    selected = _quote_for_new_comment(selected)
     block_id, block_offset, block_context = _block_anchor_for_new_comment(
         target, line_start
     )
@@ -1217,6 +1242,7 @@ async def add_comment(
             block_id=block_id,
             block_offset=block_offset,
             block_context=block_context,
+            quote=selected,
         )
     finally:
         conn.close()
@@ -1289,12 +1315,14 @@ class _CommentCreate(BaseModel):
     author: str = "anon"
     body: str
     parent_id: int | None = None
+    quote: str | None = None
 
 
 @app.post("/api/comments", status_code=201)
 async def api_post_comment(payload: _CommentCreate, request: Request):
     """Create a comment from a JSON body, return the created comment as JSON."""
     target = _resolve_typed_file(payload.path, MARKDOWN_EXTS)
+    selected = _quote_for_new_comment(payload.quote)
     block_id, block_offset, block_context = _block_anchor_for_new_comment(
         target, payload.line_start
     )
@@ -1319,6 +1347,7 @@ async def api_post_comment(payload: _CommentCreate, request: Request):
             block_id=block_id,
             block_offset=block_offset,
             block_context=block_context,
+            quote=selected,
         )
     finally:
         conn.close()

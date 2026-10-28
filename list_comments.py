@@ -186,6 +186,7 @@ def collect_comments(
             "created_at": c["created_at"],
             "updated_at": c["updated_at"],
             "parent_id": c["parent_id"],
+            "quote": c["quote"],
             "original_line_start": c["line_start"],
             "original_line_end": c["line_end"],
             "original_commit": None,
@@ -238,6 +239,7 @@ def collect_comments(
                 "created_at": c["created_at"],
                 "updated_at": c["updated_at"],
                 "parent_id": c["parent_id"],
+                "quote": c["quote"],
                 "original_line_start": c["line_start"],
                 "original_line_end": c["line_end"],
                 "original_commit": None,
@@ -321,6 +323,9 @@ def format_text(results: list[dict], file_path: str) -> str:
 
         resolved_tag = " [RESOLVED]" if c["resolved"] else ""
         lines.append(f"  #{c['id']} by {c['author']}{resolved_tag}{origin}")
+        if c.get("quote"):
+            for quote_line in c["quote"].split("\n"):
+                lines.append(f"    > {quote_line}")
         # Indent body
         for body_line in c["body"].split("\n"):
             lines.append(f"    {body_line}")

@@ -84,6 +84,11 @@ def cmd_list(args: argparse.Namespace) -> None:
             reply = " (reply)" if c.get("parent_id") else ""
             print(f"#{c['id']} {c['author']} {loc}{detached}{resolved}{reply}  "
                   f"{c['created_at'][:16]}")
+            # The span the reviewer selected (DR-7). Without it an agent
+            # reading this surface sees only the block's line range.
+            if c.get("quote"):
+                for line in c["quote"].split("\n"):
+                    print(f"  > {line}")
             for line in c["body"].split("\n"):
                 print(f"  {line}")
             print()

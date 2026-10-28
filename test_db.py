@@ -446,3 +446,55 @@ class TestBlockContext:
                 "a pre-#467 row keeps resolving by occurrence rather than being "
                 "given a context it was never written with"
             )
+
+
+class TestQuoteAnchor:
+    """DR-7: a comment can carry the text span it was written about."""
+
+    def test_quote_is_stored_with_the_comment(self, conn):
+        c = _make_comment(conn, quote="the selected words")
+        assert get_comment(conn, c["id"])["quote"] == "the selected words"
+
+    def test_block_anchored_comment_has_no_quote(self, conn):
+        c = _make_comment(conn)
+        assert get_comment(conn, c["id"])["quote"] is None
+
+    def test_migration_adds_quote_and_keeps_old_rows_block_anchored(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "legacy.db"
+            legacy = sqlite3.connect(str(db_path))
+            legacy.execute("""
+                CREATE TABLE comments (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id     TEXT    NOT NULL,
+                    line_start  INTEGER NOT NULL,
+                    line_end    INTEGER NOT NULL,
+                    author      TEXT    NOT NULL,
+                    body        TEXT    NOT NULL,
+                    parent_id   INTEGER,
+                    resolved    INTEGER NOT NULL DEFAULT 0,
+                    created_at  TEXT    NOT NULL,
+                    updated_at  TEXT    NOT NULL,
+                    file_path   TEXT,
+                    anchor_commit TEXT,
+                    block_id    TEXT,
+                    block_offset INTEGER,
+                    block_context TEXT,
+                    FOREIGN KEY (parent_id) REFERENCES comments(id)
+                )
+            """)
+            legacy.execute("""
+                INSERT INTO comments (file_id, line_start, line_end, author, body,
+                                      resolved, created_at, updated_at, file_path)
+                VALUES ('old_blob', 3, 3, 'alice', 'keep me', 0,
+                        '2026-01-01T00:00:00', '2026-01-01T00:00:00', 'doc.md')
+            """)
+            legacy.commit()
+            legacy.close()
+
+            conn = get_connection(db_path)
+            init_db(conn)
+            init_db(conn)
+
+            row = conn.execute("SELECT body, quote FROM comments WHERE id=1").fetchone()
+            assert (row[0], row[1]) == ("keep me", None)

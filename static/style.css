@@ -560,6 +560,26 @@ main { padding: 1rem; }
 .comment-meta { color: #666; font-size: .75rem; margin-bottom: .25rem; }
 .comment-body { white-space: pre-wrap; }
 
+/* DR-7: the span a comment is anchored to.  The row is already tinted
+   --has-comment, so the mark needs a stronger amber plus an underline to read
+   as "this part" rather than "this block". */
+mark.comment-quote {
+    background: #fcd34d;
+    color: inherit;
+    border-bottom: 2px solid #d97706;
+    padding: 0;
+}
+.comment-quote-text,
+.comment-quote-preview {
+    border-left: 3px solid #d97706;
+    color: #555;
+    font-style: italic;
+    margin: .15rem 0 .35rem;
+    padding-left: .5rem;
+    white-space: pre-wrap;
+}
+.comment-quote-preview[hidden] { display: none; }
+
 .comment-actions { margin-top: .35rem; }
 .comment-actions button,
 .comment-actions .action-link {

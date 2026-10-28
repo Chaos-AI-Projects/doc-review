@@ -35,6 +35,10 @@ comments:
                                      -- start line because the blame migration rewrites
                                      -- line_start, which would leave a stored start
                                      -- line stale and double-count the displacement.
+    quote       TEXT                 -- the text the reviewer selected inside the block
+                                     -- (DR-7), highlighted on render.  NULL when the
+                                     -- comment is on the whole block, which is every
+                                     -- row written before DR-7.
 """
 
 import sqlite3
@@ -58,6 +62,7 @@ CREATE TABLE IF NOT EXISTS comments (
     block_id    TEXT,
     block_offset INTEGER,
     block_context TEXT,
+    quote       TEXT,
     FOREIGN KEY (parent_id) REFERENCES comments(id)
 );
 CREATE INDEX IF NOT EXISTS idx_comments_file_lines
@@ -105,6 +110,8 @@ def init_db(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE comments ADD COLUMN block_offset INTEGER")
         if "block_context" not in cols:
             conn.execute("ALTER TABLE comments ADD COLUMN block_context TEXT")
+        if "quote" not in cols:
+            conn.execute("ALTER TABLE comments ADD COLUMN quote TEXT")
         # Ensure all indexes exist
         conn.executescript(
             "CREATE INDEX IF NOT EXISTS idx_comments_file_lines"
@@ -131,16 +138,17 @@ def create_comment(
     block_id: str | None = None,
     block_offset: int | None = None,
     block_context: str | None = None,
+    quote: str | None = None,
 ) -> dict:
     now = _now_iso()
     cur = conn.execute(
         """INSERT INTO comments (file_id, line_start, line_end, author, body,
                                  parent_id, resolved, created_at, updated_at,
                                  file_path, anchor_commit, block_id, block_offset,
-                                 block_context)
-           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)""",
+                                 block_context, quote)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (file_id, line_start, line_end, author, body, parent_id, now, now,
-         file_path, anchor_commit, block_id, block_offset, block_context),
+         file_path, anchor_commit, block_id, block_offset, block_context, quote),
     )
     conn.commit()
     return dict(conn.execute("SELECT * FROM comments WHERE id=?", (cur.lastrowid,)).fetchone())
