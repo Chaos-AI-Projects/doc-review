@@ -677,7 +677,20 @@
         for (var i = 0; i < sections.length; i++) {
             sections[i].hidden = i !== slideIndex;
         }
+        // Re-judged on every visit: an image or diagram that finished after
+        // the deck-wide check has its real size by now (DR-10).
+        if (sections[slideIndex]) deckDom.flagSlide(document, sections[slideIndex]);
         window.scrollTo(0, 0);
+    }
+
+    /* The fit check over the whole deck (DR-10).  Each overflowing slide
+     * carries its own flag, seen when it comes up; the console line is the
+     * list of them all at once, for whoever is checking before a talk. */
+    function checkDeckFit() {
+        var over = deckDom.checkFit(document, deckEl);
+        if (over && over.length) {
+            console.warn("Slides overflowing the 1920x1080 stage:", over.join(", "));
+        }
     }
 
     /* The ONE place a presentation action is carried out.  The keyboard
@@ -777,13 +790,23 @@
         presentBtn.classList.add("active");
         showSlide(0);
         deckEl.focus();
+        checkDeckFit();
+        // Images and web fonts that arrive later re-judge what they resize.
+        // The deck is dropped on exit, and its listener with it.
+        deckDom.watchFit(document, deckEl);
         // The deck carries the same un-rendered `<div class="mermaid">` the
         // review rows do, so it needs a render pass of its own (MS-605).  Pass
         // the deck rather than letting the root default to the document: the
         // review DOM is hidden, not destroyed, and its already-rendered
         // containers hold SVG whose textContent is not diagram source.
         if (typeof renderer.initMermaid === "function") {
-            renderer.initMermaid(deckEl);
+            // A drawn diagram is taller than its source text, so the deck is
+            // judged again once they are all drawn -- if it is still up.
+            var drawing = renderer.initMermaid(deckEl);
+            var judged = deckEl;
+            if (drawing && typeof drawing.then === "function") {
+                drawing.then(function () { if (deckEl === judged) checkDeckFit(); });
+            }
         }
         // Last, and only after the deck is on screen: the request must come
         // from the click that got us here, and it must not be able to stop the

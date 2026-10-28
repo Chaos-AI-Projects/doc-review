@@ -879,7 +879,10 @@ body.presenting { overflow: hidden; }
     overflow: auto;
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    /* `safe`: a slide that overflows spills downwards only, so its top stays
+     * reachable and the fit check's scrollHeight counts all of it (DR-10). */
+    justify-content: center;  /* for a browser without `safe` */
+    justify-content: safe center;
     gap: 20px;
     font-size: 30px;
 }
@@ -952,6 +955,24 @@ body.presenting { overflow: hidden; }
 }
 .presentation .slide img { max-width: 100%; }
 
+/* The fit check's flag (DR-10), on a slide whose content overflows the
+ * stage.  Absolutely positioned, so it adds nothing to the height it reports
+ * on, and in the top-left corner, which no control or page number uses. */
+.presentation .slide .fit-flag {
+    position: absolute;
+    top: 24px;
+    left: 32px;
+    z-index: 1;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--warn-fg);
+    background: var(--warn-bg);
+    border: 2px solid var(--warn-edge);
+}
+.presentation .slide.overflowing { outline: 6px solid var(--warn-edge); outline-offset: -6px; }
+
 .presentation .slide-number {
     position: absolute;
     bottom: 40px;
@@ -975,7 +996,7 @@ body.presenting { overflow: hidden; }
 .presentation.theme-gaia { background: #fffefb; color: #2c2c2c; }
 .presentation.theme-gaia .slide h1 { color: #1a4f9c; }
 .presentation.theme-uncover { background: #fff; text-align: center; }
-.presentation.theme-uncover .slide { align-items: center; }
+.presentation.theme-uncover .slide { align-items: center; align-items: safe center; }
 
 /* Per-slide layouts, from a Marp `<!-- _class: … -->` directive (#462), and
  * constrained to this set by view_specs.PRESENTATION_LAYOUTS.  `default` gets
@@ -1009,7 +1030,7 @@ body.presenting { overflow: hidden; }
 
 /* `.slide` is a flex column, so centring needs the cross axis too — text-align
  * alone leaves each block stretched the full width. */
-.presentation .slide.layout-centered { text-align: center; align-items: center; }
+.presentation .slide.layout-centered { text-align: center; align-items: center; align-items: safe center; }
 
 /* Uniform across the slide, deliberately.  `buildDeck` gives every row its own
  * `div.slide-block`, so two paragraphs on a slide are never siblings: a

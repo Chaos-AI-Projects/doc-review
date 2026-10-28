@@ -164,3 +164,29 @@ class TestPages:
         html = client.get("/view?path=a.md").text
         assert html.index("docReviewTheme.onChange(") < html.index("await initMermaid();")
         assert "if (window.docReviewTheme)" in html
+
+
+class TestSlideFit:
+    def test_slides_centre_safely(self):
+        """DR-10: an overflowing slide must spill downwards only.
+
+        A slide is an `overflow: auto` flex box that centres its content.
+        Plain `center` spills an overflow equally above and below, and the
+        part above the top edge can be neither scrolled to nor counted by
+        `scrollHeight`.  The fit check in deck_dom.js measures
+        `scrollHeight`, so plain `center` would make it report half the
+        overflow and hide the top of the slide besides.  `safe center` looks
+        the same on every slide that fits and falls back to the start edge on
+        one that does not.
+        """
+        offenders = []
+        for sel, body in rules(CSS):
+            if not re.search(r"\.slide(?![-\w])", sel):
+                continue
+            for prop in ("justify-content", "align-items"):
+                # The last declaration wins; a plain `center` before it is
+                # the fallback for a browser that rejects `safe`.
+                values = re.findall(prop + r"\s*:\s*([^;]+);", body)
+                if values and "center" in values[-1] and "safe" not in values[-1]:
+                    offenders.append((sel, prop))
+        assert offenders == []

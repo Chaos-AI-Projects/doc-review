@@ -324,6 +324,137 @@ function specs(overrides) {
     assert("fit: the refit re-measures the deck", props["--stage-scale"], "0.5");
 })();
 
+// 11. The fit check (DR-10) measures each RENDERED slide against its own
+//     box, so its stub models layout: a hidden slide measures 0x0, the way
+//     `display: none` does in a browser.
+function laidOut(content, box) {
+    var s = node("section");
+    s.className = "slide layout-default";
+    s.hidden = true;
+    box = box || { w: 1920, h: 1080 };
+    function size(v) { return function () { return s.hidden ? 0 : v; }; }
+    Object.defineProperty(s, "clientWidth", { get: size(box.w) });
+    Object.defineProperty(s, "clientHeight", { get: size(box.h) });
+    Object.defineProperty(s, "scrollWidth", { get: function () { return s.hidden ? 0 : content.w; } });
+    Object.defineProperty(s, "scrollHeight", { get: function () { return s.hidden ? 0 : content.h; } });
+    s.removeChild = function (c) {
+        this.children = this.children.filter(function (x) { return x !== c; });
+        return c;
+    };
+    return s;
+}
+
+function stubDeck(slides) {
+    var d = node("div");
+    d.className = "presentation theme-default";
+    d.clientWidth = 1920;
+    d.clientHeight = 1080;
+    slides.forEach(function (s) { d.appendChild(s); });
+    return d;
+}
+
+(function () {
+    var fits = { w: 1920, h: 1080 };
+    var tall = { w: 1920, h: 1320 };
+    var wide = { w: 2100, h: 1080 };
+
+    var shown = laidOut(fits);
+    shown.hidden = false;
+    assert("fit check: a slide that fits", deckDom.slideOverflow(shown), 0);
+    var t = laidOut(tall); t.hidden = false;
+    assert("fit check: vertical overflow in stage px", deckDom.slideOverflow(t), 240);
+    var w = laidOut(wide); w.hidden = false;
+    assert("fit check: horizontal overflow counts too", deckDom.slideOverflow(w), 180);
+    // Sub-pixel rounding makes scrollHeight one more than clientHeight on a
+    // slide that fits exactly; that is not an overflow worth a warning.
+    var r = laidOut({ w: 1920, h: 1081 }); r.hidden = false;
+    assert("fit check: one px of rounding is not overflow", deckDom.slideOverflow(r), 0);
+
+    // Every slide is measured, not just the one on screen, and each keeps
+    // the visibility it had.
+    var a = laidOut(fits), b = laidOut(tall), c = laidOut(wide);
+    a.hidden = false;
+    var deck = stubDeck([a, b, c]);
+    var over = deckDom.checkFit(fakeDocument, deck);
+    assertDeep("fit check: lists the overflowing slides by number", over, [2, 3]);
+    assertDeep("fit check: visibility restored",
+        [a.hidden, b.hidden, c.hidden], [false, true, true]);
+
+    function flags(s) { return queryAll(s, ".fit-flag"); }
+    assert("fit check: a fitting slide carries no flag", flags(a).length, 0);
+    assert("fit check: an overflowing slide is flagged", flags(b).length, 1);
+    assert("fit check: the flag says by how much and what to do",
+        flags(b)[0].textContent, "Overflows the slide by 240px -- split it");
+    assert("fit check: the slide is marked",
+        b.className.split(/\s+/).indexOf("overflowing") !== -1, true);
+
+    // Re-checking is how a slide whose image or diagram finished late gets
+    // judged on its final size, so it must be idempotent and must clear a
+    // flag that no longer applies.
+    deckDom.checkFit(fakeDocument, deck);
+    assert("fit check: re-check keeps one flag", flags(b).length, 1);
+    tall.h = 1080;
+    deckDom.checkFit(fakeDocument, deck);
+    assert("fit check: a slide that now fits loses its flag", flags(b).length, 0);
+    assert("fit check: and its mark",
+        b.className.split(/\s+/).indexOf("overflowing"), -1);
+    assert("fit check: other classes survive", b.className, "slide layout-default");
+
+    // flagSlide re-judges one slide, for the review app's per-slide re-check.
+    tall.h = 1500;
+    b.hidden = false;
+    assert("fit check: flagSlide returns the overflow", deckDom.flagSlide(fakeDocument, b), 420);
+    assert("fit check: flagSlide flags", flags(b).length, 1);
+    // A slide that is not laid out (hidden, or in a hidden deck) measures
+    // 0x0, which would read as "fits" and clear a real flag.
+    b.hidden = true;
+    assert("fit check: flagSlide skips an unmeasured slide", deckDom.flagSlide(fakeDocument, b), null);
+    assert("fit check: and keeps its flag", flags(b).length, 1);
+
+    // A hidden deck (the standalone page's markdown view) measures 0x0 and
+    // says nothing about its slides.  Report "unknown", and leave every
+    // existing flag alone rather than clearing it on a non-measurement.
+    deck.clientWidth = 0; deck.clientHeight = 0;
+    assert("fit check: a hidden deck is not measured", deckDom.checkFit(fakeDocument, deck), null);
+    assert("fit check: and keeps its flags", flags(b).length, 1);
+})();
+
+// 12. buildDeck's slides start unflagged: the fit check can only judge a
+//     slide after the browser has laid it out.
+(function () {
+    var deck = deckDom.buildDeck(fakeDocument, specs());
+    assert("fit check: a fresh deck has no flags", queryAll(deck, ".fit-flag").length, 0);
+})();
+
+// 13. watchFit re-judges what changes size after the deck-wide check: a
+//     slide whose image loads, and the whole deck once web fonts swap in.
+(function () {
+    var content = { w: 1920, h: 1080 };
+    var s = laidOut(content);
+    s.hidden = false;
+    var deck = stubDeck([s]);
+    var ready = null;
+    var doc = { createElement: fakeDocument.createElement,
+                fonts: { ready: { then: function (fn) { ready = fn; } } } };
+    deckDom.watchFit(doc, deck);
+    var onLoad = (deck.listeners.load || [])[0];
+    assert("watch: listens for load", typeof onLoad, "function");
+
+    content.h = 1200;
+    var img = { closest: function (sel) { return sel === "section.slide" ? s : null; } };
+    onLoad({ target: img });
+    assert("watch: an image load re-judges its slide", queryAll(s, ".fit-flag").length, 1);
+
+    content.h = 1080;
+    ready();
+    assert("watch: fonts.ready re-checks the deck", queryAll(s, ".fit-flag").length, 0);
+
+    // A load from something outside any slide, or a document without the
+    // font API, is ignored rather than thrown on.
+    onLoad({ target: { closest: function () { return null; } } });
+    deckDom.watchFit(fakeDocument, stubDeck([]));
+})();
+
 if (failures.length) {
     console.error("FAIL (" + failures.length + "):");
     failures.forEach(function (f) { console.error("  - " + f); });

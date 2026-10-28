@@ -183,12 +183,104 @@
         return detach;
     }
 
+    /* The fit check (DR-10).  A slide is a fixed 1920x1080 box with
+     * `overflow: auto`, so content that does not fit used to get an inner
+     * scrollbar and nothing else.  The rule is to split a crowded slide, never
+     * to shrink it, so the check only reports.
+     *
+     * It measures the slide the browser actually laid out rather than
+     * estimating from text length: fonts, images, tables and diagrams decide
+     * the height, and only the browser knows them.  `transform: scale` leaves
+     * scroll and client sizes alone, so the figures are stage pixels, the
+     * same on a phone and a monitor.  One pixel of slack absorbs sub-pixel
+     * rounding on a slide that fits exactly.
+     *
+     * The figure is only whole because style.css centres slides with `safe
+     * center`.  Plain `center` spills an overflow above the top edge too,
+     * where scrollHeight does not count it (test_theme_css.py guards this). */
+    var FIT_SLACK = 1;
+
+    function slideOverflow(section) {
+        var over = Math.max(section.scrollHeight - section.clientHeight,
+                            section.scrollWidth - section.clientWidth);
+        return over > FIT_SLACK ? over : 0;
+    }
+
+    /* Judge one slide and set its flag to match, returning the overflow in
+     * stage pixels.  Idempotent, and a slide that now fits loses its flag,
+     * because a re-check is how a late image or diagram gets judged on its
+     * final size.  The flag is absolutely positioned inside the slide, so it
+     * adds nothing to the height it reports on.
+     *
+     * A slide that is not laid out (hidden, or inside a hidden deck) measures
+     * 0x0, which would read as "fits".  It returns null and keeps its flag. */
+    function flagSlide(doc, section) {
+        if (!(section.clientWidth > 0) || !(section.clientHeight > 0)) return null;
+        var over = slideOverflow(section);
+        var flag = section.querySelector(".fit-flag");
+        var classes = section.className.split(/\s+/).filter(function (c) {
+            return c && c !== "overflowing";
+        });
+        if (over) classes.push("overflowing");
+        section.className = classes.join(" ");
+        if (!over) {
+            if (flag) section.removeChild(flag);
+            return 0;
+        }
+        if (!flag) {
+            flag = doc.createElement("div");
+            flag.className = "fit-flag";
+            flag.setAttribute("role", "status");
+            section.appendChild(flag);
+        }
+        flag.textContent = "Overflows the slide by " + over + "px -- split it";
+        return over;
+    }
+
+    /* Judge every slide in `deck` and return the numbers (1-based) of those
+     * that overflow.  Slides off screen are `hidden`, which lays them out at
+     * 0x0, so each is shown for its measurement and put back as it was.
+     * A deck that is itself hidden measures nothing, so the answer is null and
+     * no flag changes: clearing them on a non-measurement would report a
+     * crowded deck as clean. */
+    function checkFit(doc, deck) {
+        if (!(deck.clientWidth > 0) || !(deck.clientHeight > 0)) return null;
+        var sections = deck.querySelectorAll("section.slide");
+        var over = [];
+        for (var i = 0; i < sections.length; i++) {
+            var section = sections[i];
+            var wasHidden = section.hidden;
+            section.hidden = false;
+            if (flagSlide(doc, section)) over.push(i + 1);
+            section.hidden = wasHidden;
+        }
+        return over;
+    }
+
+    /* Re-judge slides whose size changes after the deck-wide check: an image
+     * that loads on a slide, and web fonts that swap in for the fallback.
+     * `load` does not bubble, so the listener captures.  A slide off screen
+     * is skipped by flagSlide and judged again when it is shown. */
+    function watchFit(doc, deck) {
+        deck.addEventListener("load", function (e) {
+            var slide = e.target && e.target.closest ? e.target.closest("section.slide") : null;
+            if (slide) flagSlide(doc, slide);
+        }, true);
+        if (doc.fonts && doc.fonts.ready && typeof doc.fonts.ready.then === "function") {
+            doc.fonts.ready.then(function () { checkFit(doc, deck); });
+        }
+    }
+
     var api = {
         PRESENTATION_CONTROLS: PRESENTATION_CONTROLS,
         attachStageFit: attachStageFit,
         stageScale: stageScale,
         buildControls: buildControls,
         buildDeck: buildDeck,
+        checkFit: checkFit,
+        flagSlide: flagSlide,
+        slideOverflow: slideOverflow,
+        watchFit: watchFit,
     };
 
     if (typeof module !== "undefined" && module.exports) {
