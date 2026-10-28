@@ -1012,3 +1012,85 @@ class TestTwoColumnRegions:
         source = "<!-- _class: two-column -->\n\n<!-- column -->\n\n---\n\n# B\n"
         slides = slide_specs(render_markdown_blocks(source))
         assert [s["rows"][0]["startLine"] for s in slides] == [7]
+
+
+def _chrome(source):
+    return presentation_specs(render_markdown_blocks(source), None, source)["chrome"]
+
+
+class TestSlideChrome:
+    """The frame repeated round every slide (DR-12): a top bar naming the deck
+    and a footer line along the bottom edge, so a slide screenshotted or
+    printed alone still says which deck it came from."""
+
+    def test_the_top_bar_names_the_deck_from_its_title(self):
+        source = "---\nmarp: true\ntitle: Quarterly review\n---\n\n# Hello\n"
+        assert _chrome(source) == {"header": "Quarterly review", "footer": ""}
+
+    def test_a_quoted_title_loses_its_quotes(self):
+        source = '---\nmarp: true\ntitle: "Q3: the plan"\n---\n\n# Hello\n'
+        assert _chrome(source)["header"] == "Q3: the plan"
+
+    def test_without_a_title_the_first_h1_names_the_deck(self):
+        source = "---\nmarp: true\n---\n\n## Agenda\n\n---\n\n# The real title #\n\n---\n\n# Later\n"
+        assert _chrome(source)["header"] == "The real title"
+
+    def test_a_setext_h1_names_the_deck(self):
+        source = "---\nmarp: true\n---\n\nThe title\n=========\n\nbody\n"
+        assert _chrome(source)["header"] == "The title"
+
+    def test_an_h1_shown_as_code_does_not_name_the_deck(self):
+        source = "---\nmarp: true\n---\n\n```\n# not a title\n```\n\n# Title\n"
+        assert _chrome(source)["header"] == "Title"
+
+    def test_a_setext_h2_starting_with_a_hash_is_not_an_h1(self):
+        source = "---\nmarp: true\n---\n\n#hashtag topic\n---\n\n# Title\n"
+        assert _chrome(source)["header"] == "Title"
+
+    def test_a_two_line_setext_h1_names_the_deck(self):
+        source = "---\nmarp: true\n---\n\nLine one\nline two\n===\n"
+        assert _chrome(source)["header"] == "Line one line two"
+
+    def test_an_empty_h1_does_not_blank_the_title(self):
+        source = "---\nmarp: true\n---\n\n#\n\n# Title\n"
+        assert _chrome(source)["header"] == "Title"
+
+    def test_a_quoted_switch_still_switches(self):
+        source = '---\nmarp: true\ntitle: T\nchrome: "false"\n---\n\n# Hello\n'
+        assert _chrome(source) is None
+
+    def test_a_deck_with_no_title_has_an_empty_top_bar(self):
+        source = "---\nmarp: true\n---\n\n## Only an h2\n"
+        assert _chrome(source) == {"header": "", "footer": ""}
+
+    def test_marp_header_and_footer_directives_override(self):
+        source = (
+            "---\nmarp: true\ntitle: T\nheader: Team sync\n"
+            "footer: ACME -- internal\n---\n\n# Hello\n"
+        )
+        assert _chrome(source) == {"header": "Team sync", "footer": "ACME -- internal"}
+
+    def test_an_empty_header_directive_blanks_the_top_bar(self):
+        source = "---\nmarp: true\ntitle: T\nheader: ''\n---\n\n# Hello\n"
+        assert _chrome(source)["header"] == ""
+
+    @pytest.mark.parametrize("value", ["false", "False", "off", "no"])
+    def test_a_deck_can_switch_the_chrome_off(self, value):
+        source = f"---\nmarp: true\ntitle: T\nchrome: {value}\n---\n\n# Hello\n"
+        assert _chrome(source) is None
+
+    def test_the_chrome_is_on_unless_switched_off(self):
+        source = "---\nmarp: true\nchrome: true\n---\n\n# Hello\n"
+        assert _chrome(source) == {"header": "Hello", "footer": ""}
+
+    def test_the_chrome_takes_no_slide_rows(self):
+        """Chrome is a frame, not content: the slides are what they were."""
+        source = "---\nmarp: true\ntitle: T\n---\n\n# Hello\n\n---\n\nbody\n"
+        blocks = render_markdown_blocks(source)
+        assert presentation_specs(blocks, None, source)["slides"] == slide_specs(blocks)
+
+    def test_the_chrome_survives_the_bridge(self):
+        source = "---\nmarp: true\nfooter: f\n---\n\n# Hello\n"
+        blocks = render_markdown_blocks(source)
+        via = TestPyodideBridgeContract._via_bridge(presentation_specs, [blocks, None, source])
+        assert via["chrome"] == {"header": "Hello", "footer": "f"}

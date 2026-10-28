@@ -194,6 +194,65 @@ class TestSlideFit:
         assert offenders == []
 
 
+def _px(body, prop):
+    """The last ``prop: Npx`` declared in *body*, as a number, or 0."""
+    values = re.findall(r"(?<![-\w])" + prop + r"\s*:\s*(\d+)px", body)
+    return int(values[-1]) if values else 0
+
+
+def _rule(selector):
+    """Every declaration aimed at *selector*, grouped rules included, in order."""
+    return ";".join(
+        body
+        for sel, body in rules(CSS)
+        if selector in (part.strip() for part in sel.split(","))
+    )
+
+
+class TestSlideChrome:
+    """DR-12: the top bar and the footer line sit in the slide's own padding,
+    so they never cover a row and the fit check (DR-10) never counts them."""
+
+    SLIDE = ".presentation .slide"
+
+    def _vertical_padding(self):
+        values = re.findall(r"padding\s*:\s*(\d+)px", _rule(self.SLIDE))
+        return int(values[-1])
+
+    @pytest.mark.parametrize("band, edge", [("header", "top"), ("footer", "bottom")])
+    def test_the_band_fits_in_the_slide_padding(self, band, edge):
+        body = _rule(f".presentation .slide-{band}")
+        assert re.search(r"position\s*:\s*absolute", body)
+        depth = (
+            _px(body, edge)
+            + _px(body, "line-height")
+            + _px(body, "padding-top")
+            + _px(body, "padding-bottom")
+            + _px(body, f"border-{'bottom' if edge == 'top' else 'top'}")
+        )
+        assert 0 < depth <= self._vertical_padding()
+
+    @pytest.mark.parametrize("band", ["header", "footer"])
+    def test_a_long_title_cannot_widen_the_slide(self, band):
+        """A title wider than the slide is clipped.  Unclipped, it would grow
+        the slide's scrollWidth, and the fit check would flag every slide."""
+        body = _rule(f".presentation .slide-{band}")
+        assert re.search(r"white-space\s*:\s*nowrap", body)
+        assert re.search(r"overflow\s*:\s*hidden", body)
+
+    @pytest.mark.parametrize("band", ["header", "footer"])
+    def test_the_band_does_not_follow_the_slide_alignment(self, band):
+        """Title, centered and big-number slides and the uncover theme centre
+        their text; the frame stays put on every slide."""
+        assert re.search(r"text-align\s*:\s*left", _rule(f".presentation .slide-{band}"))
+
+    @pytest.mark.parametrize("band", ["header", "footer"])
+    def test_the_band_clears_the_side_padding(self, band):
+        body = _rule(f".presentation .slide-{band}")
+        side = int(re.findall(r"padding\s*:\s*\d+px\s+(\d+)px", _rule(self.SLIDE))[-1])
+        assert _px(body, "left") == side and _px(body, "right") == side
+
+
 class TestLayoutDisplay:
     def test_a_layout_that_sets_display_still_hides_a_hidden_slide(self):
         """DR-11: `.presentation .slide.layout-X { display: grid }` has the

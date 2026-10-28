@@ -345,12 +345,70 @@ def front_matter_directives(source):
     return {}  # unterminated: the parser does not see front matter either
 
 
+# Front-matter values that switch the chrome off (DR-12).  It is on unless a
+# deck says otherwise, because the frame is what lets one slide, screenshotted
+# or printed alone, say which deck it came from.
+_CHROME_OFF = ("false", "off", "no")
+
+
+def _unquote(value):
+    """A front-matter value without the YAML quotes round it."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
+def _h1_text(block):
+    """The text of *block* if it is a level-1 heading, else ``None``.
+
+    Checked by ``type`` like ``_is_slide_break``: a ``# line`` inside a fence
+    is content, not a title.  The text is the heading's markdown as written,
+    the same text the TOC shows, and it reaches the page as ``textContent``.
+    The level is read off the rendered tag, not the raw text: ``#tag``
+    underlined with ``---`` is a setext h2 that merely starts with a hash.
+    """
+    if block.get("type") != "heading" or not block.get("html", "").startswith("<h1"):
+        return None
+    lines = (block.get("raw") or "").strip().split("\n")
+    if len(lines) > 1:  # setext: the text, then its `===` underline
+        return " ".join(line.strip() for line in lines[:-1])
+    text = lines[0].strip()[1:].strip()
+    # An ATX heading may close with a run of `#`, set off by a space.
+    closed = text.rstrip("#")
+    if closed != text and (not closed or closed[-1] == " "):
+        text = closed.strip()
+    return text
+
+
+def chrome_specs(blocks, directives):
+    """The frame drawn round every slide (DR-12), or ``None`` when it is off.
+
+    The top bar names the deck: Marp's ``header`` directive when the deck
+    sets one, even to nothing, else its ``title``, else its first non-empty
+    h1.  The
+    footer carries Marp's ``footer`` text, if any, on a line along the bottom
+    edge.  ``chrome: false`` turns the whole frame off.
+    """
+    if _unquote(directives.get("chrome", "")).lower() in _CHROME_OFF:
+        return None
+    if "header" in directives:
+        header = _unquote(directives["header"])
+    else:
+        header = _unquote(directives.get("title", ""))
+        if not header:
+            header = next(
+                (t for t in map(_h1_text, blocks or []) if t), ""
+            )
+    return {"header": header, "footer": _unquote(directives.get("footer", ""))}
+
+
 def presentation_specs(blocks, comments_by_block=None, source=""):
     """Everything the client needs to present a document as slides (#452).
 
     Honours the global ``marp`` / ``theme`` / ``paginate`` front-matter
-    directives, plus the per-slide ``_class`` / ``class`` layout directives
-    each slide carries on its own spec (#462).
+    directives, the slide chrome's ``title`` / ``header`` / ``footer`` /
+    ``chrome`` (DR-12), plus the per-slide ``_class`` / ``class`` layout
+    directives each slide carries on its own spec (#462).
     """
     directives = front_matter_directives(source)
     slides = slide_specs(blocks, comments_by_block)
@@ -367,6 +425,7 @@ def presentation_specs(blocks, comments_by_block=None, source=""):
         # Lands in a CSS class name, so it may only ever be one of ours.
         "theme": theme if theme in PRESENTATION_THEMES else "default",
         "paginate": directives.get("paginate", "").lower() == "true",
+        "chrome": chrome_specs(blocks, directives),
         "slides": slides,
     }
 

@@ -259,6 +259,10 @@ Front-matter directives:
 | `marp` | `true` | Required. Offers the document for presentation. Case-insensitive. |
 | `theme` | `default`, `gaia`, `uncover`, `swiss-modern`, `paper-ink`, `dark-botanical`, `vintage-editorial` | Deck styling. Case-**sensitive**, and an unrecognised name falls back to `default` silently, so `Gaia` gives you `default`. |
 | `paginate` | `true` | Shows a slide number on each slide. Case-insensitive. |
+| `title` | any text | Names the deck in the top bar of every slide. Without it, the first `#` heading does. |
+| `header` | any text | Marp's header. Replaces the title in the top bar; `header: ''` leaves the bar empty. |
+| `footer` | any text | Marp's footer. Text on the line along the bottom edge of every slide. |
+| `chrome` | `false` | Turns off the top bar and the footer line. On by default. Also accepts `off` or `no`. |
 
 ### Slide breaks
 

@@ -14,8 +14,8 @@
  * prevent.
  *
  * Nothing here decides anything about the deck.  Theme, per-slide layouts,
- * slide grouping and pagination all arrive already settled in the specs, whose
- * layout-name whitelist view_specs applied (#462).  A JS-side default would be
+ * slide grouping, pagination and chrome all arrive already settled in the
+ * specs, whose layout-name whitelist view_specs applied (#462).  A JS-side default would be
  * a second, divergent home for that whitelist.  test_server.py counts the
  * reads across both JS files to keep it that way.
  */
@@ -93,6 +93,26 @@
         return bar;
     }
 
+    /* The frame round a slide (DR-12): a top bar naming the deck and a line
+     * along the bottom edge holding the footer text.  Both are absolutely
+     * placed in the slide's padding, so they take no room from its rows and
+     * add nothing to the height the fit check measures (test_theme_css.py
+     * holds them inside it).  The text is the deck author's front matter, so
+     * it goes in as textContent.  An empty top bar is left out; the footer
+     * line stays as the frame's bottom edge whether or not it has words. */
+    function appendChrome(doc, section, chrome) {
+        if (chrome.header) {
+            var header = doc.createElement("div");
+            header.className = "slide-header";
+            header.textContent = chrome.header;
+            section.appendChild(header);
+        }
+        var footer = doc.createElement("div");
+        footer.className = "slide-footer";
+        footer.textContent = chrome.footer || "";
+        section.appendChild(footer);
+    }
+
     /* Build the deck element for `specs`.  `onAction` receives the action
      * string of a pressed control and may be omitted, which renders a deck
      * whose controls do nothing — useful before navigation is wired.
@@ -135,6 +155,7 @@
                 }
             }
 
+            if (specs.chrome) appendChrome(doc, section, specs.chrome);
             if (specs.paginate) {
                 var num = doc.createElement("div");
                 num.className = "slide-number";

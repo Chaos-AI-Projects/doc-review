@@ -502,6 +502,45 @@ function stubDeck(slides) {
         deck.querySelectorAll("section.slide")[1].children[0].className, "slide-block");
 })();
 
+// 16. Slide chrome (DR-12): a top bar naming the deck and a footer line on
+//     every slide, carrying the text view_specs settled.  textContent, never
+//     innerHTML, because the text is the deck author's front matter.
+(function () {
+    var deck = deckDom.buildDeck(fakeDocument,
+        specs({ chrome: { header: "<b>Deck</b>", footer: "ACME" } }));
+    var headers = deck.querySelectorAll("div.slide-header");
+    var footers = deck.querySelectorAll("div.slide-footer");
+    assert("chrome: one top bar per slide", headers.length, 2);
+    assert("chrome: one footer per slide", footers.length, 2);
+    assert("chrome: top bar text is text", headers[1].textContent, "<b>Deck</b>");
+    assert("chrome: top bar html untouched", headers[1].innerHTML, null);
+    assert("chrome: footer text", footers[0].textContent, "ACME");
+    assert("chrome: not a slide block",
+        deck.querySelectorAll("div.slide-block").length, 3);
+})();
+
+// 17. An empty top bar is left out; the footer line stays, as the frame's
+//     bottom edge.
+(function () {
+    var deck = deckDom.buildDeck(fakeDocument,
+        specs({ chrome: { header: "", footer: "" } }));
+    assert("chrome: empty header left out",
+        deck.querySelectorAll("div.slide-header").length, 0);
+    assert("chrome: footer line kept",
+        deck.querySelectorAll("div.slide-footer").length, 2);
+})();
+
+// 18. Chrome off, or specs from before DR-12 with no key: no frame at all.
+(function () {
+    [specs({ chrome: null }), specs()].forEach(function (s, i) {
+        var deck = deckDom.buildDeck(fakeDocument, s);
+        assert("chrome off " + i + ": no top bar",
+            deck.querySelectorAll("div.slide-header").length, 0);
+        assert("chrome off " + i + ": no footer",
+            deck.querySelectorAll("div.slide-footer").length, 0);
+    });
+})();
+
 if (failures.length) {
     console.error("FAIL (" + failures.length + "):");
     failures.forEach(function (f) { console.error("  - " + f); });

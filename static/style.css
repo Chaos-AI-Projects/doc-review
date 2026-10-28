@@ -957,7 +957,9 @@ body.presenting { overflow: hidden; }
 
 /* The fit check's flag (DR-10), on a slide whose content overflows the
  * stage.  Absolutely positioned, so it adds nothing to the height it reports
- * on, and in the top-left corner, which no control or page number uses. */
+ * on, and in the top-left corner, which no control or page number uses.  It
+ * covers the start of the slide chrome's top bar (DR-12) on purpose: the
+ * warning outranks the deck's name. */
 .presentation .slide .fit-flag {
     position: absolute;
     top: 24px;
@@ -979,6 +981,37 @@ body.presenting { overflow: hidden; }
     right: 56px;
     font-size: 20px;
     color: var(--text-faint);
+}
+
+/* Slide chrome (DR-12): the deck's name in a top bar and a line along the
+ * bottom edge, on every slide.  Both sit in the slide's 96px vertical padding
+ * and span its 128px side margins, so they cover no row and the fit check
+ * never counts them (test_theme_css.py holds the arithmetic).  The footer
+ * shares .slide-number's baseline, so a paginated deck reads as one line. */
+.presentation .slide-header,
+.presentation .slide-footer {
+    position: absolute;
+    left: 128px;
+    right: 128px;
+    font-size: 20px;
+    line-height: 24px;
+    /* Title slides and the uncover theme centre their text; the frame stays
+     * where it is on every slide. */
+    text-align: left;
+    color: var(--text-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.presentation .slide-header {
+    top: 40px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+.presentation .slide-footer {
+    bottom: 40px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
 }
 
 /* Themes are constrained to this set by view_specs.PRESENTATION_THEMES. */
@@ -1287,7 +1320,9 @@ pre.front-matter {
 .presentation.theme-dark-botanical .slide li::marker { color: #c9b896; }
 .presentation.theme-dark-botanical .slide.layout-title h1 { font-size: 4.6em; }
 .presentation.theme-dark-botanical .slide.layout-title p,
-.presentation.theme-dark-botanical .slide-number { color: #9a9590; }
+.presentation.theme-dark-botanical .slide-number,
+.presentation.theme-dark-botanical .slide-header,
+.presentation.theme-dark-botanical .slide-footer { color: #9a9590; }
 .presentation.theme-dark-botanical .slide pre { background: #1c1b1a; color: #e8e4df; }
 /* The base table header is light grey and sets no colour, which would leave
  * this theme's light text unreadable on it. */
