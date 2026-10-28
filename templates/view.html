@@ -126,13 +126,30 @@ async function initMermaid(root = document) {
     // cost the diagram and nothing else; the escaped source stays on screen.
     try {
         const m = await import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs');
-        m.default.initialize({ startOnLoad: false, theme: 'default' });
+        // The deck's diagram box is white in every deck theme, so only the
+        // review view follows the page theme (DR-8).
+        const deck = root.classList && root.classList.contains('presentation');
+        const theme = deck || !window.docReviewTheme
+            ? 'default' : window.docReviewTheme.mermaidTheme();
+        m.default.initialize({ startOnLoad: false, theme });
         await window.docReviewMermaid.renderMermaid(
             root, (id, src) => m.default.render(id, src)
         );
     } catch (err) {
         console.warn('Mermaid rendering unavailable, showing source:', err);
     }
+}
+
+// A theme switch redraws the review's diagrams from their kept source.  Only
+// .view-layout: the deck is appended to <body>, outside it, and keeps
+// mermaid's light theme even when the OS flips mid-talk.  Registered before
+// the first render's await, so a switch during the CDN load is not missed,
+// and guarded, so a theme.js that failed to load cannot abort this module.
+if (window.docReviewTheme) {
+    window.docReviewTheme.onChange(() => {
+        const review = document.querySelector('.view-layout');
+        if (review) initMermaid(review);
+    });
 }
 
 // Initial mermaid render on server-side content (no-JS fallback path).

@@ -33,7 +33,14 @@
         var step = function (i) {
             if (i >= containers.length) return Promise.resolve(rendered);
             var container = containers[i];
-            var src = container.textContent;
+            /* The first render keeps the source on the container, because
+             * once it holds SVG its textContent is the diagram's labels.  A
+             * theme switch (DR-8) re-renders from what was kept. */
+            var src = container.getAttribute("data-mermaid-src");
+            if (src === null) {
+                src = container.textContent;
+                container.setAttribute("data-mermaid-src", src);
+            }
             var id = "mermaid-" + Math.random().toString(36).slice(2, 8);
             return Promise.resolve()
                 .then(function () { return render(id, src); })

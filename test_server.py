@@ -3895,7 +3895,43 @@ class TestPresentationRoundTwo:
         invisible variant through — see the contrast test below.  Transparency
         has to come from the background, so the glyph keeps its own alpha.
         """
-        assert "rgba(" in self._css_rule(marp_client, ".presentation-control")
+        for rgba, _ in self._control_backgrounds(marp_client):
+            assert rgba[3] < 1.0
+
+    @classmethod
+    def _control_backgrounds(cls, client):
+        """The resting control's background on each side of the palette, as
+        ((r, g, b, a), backdrop) pairs.
+
+        Since DR-8 the background is a `light-dark()` variable from `:root`,
+        and the backdrop is the default deck's own `--surface` on the same
+        side: white in light mode, the dark surface in dark mode.
+        """
+        css = cls._strip_comments(cls._css(client))
+        control = cls._css_rule(client, ".presentation-control")
+        name = re.search(r"background:\s*var\((--[\w-]+)\)", control)
+        assert name, "the resting control's background is not a theme variable"
+        root = dict(re.findall(r"(--[\w-]+)\s*:\s*([^;]+);", css))
+
+        def sides(var):
+            pair = re.fullmatch(r"light-dark\((.*)\)", root[var].strip())
+            assert pair, "%s has no light-dark() pair" % var
+            parts = re.findall(r"rgba\([^)]*\)|#[0-9a-fA-F]{3,8}", pair.group(1))
+            assert len(parts) == 2, "%s does not split into two colours" % var
+            return parts
+
+        def rgb(literal):
+            if literal.startswith("#"):
+                h = literal[1:]
+                if len(h) == 3:
+                    h = "".join(c * 2 for c in h)
+                return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4)) + (1.0,)
+            nums = re.findall(r"[\d.]+", literal)
+            return tuple(int(n) for n in nums[:3]) + (float(nums[3]),)
+
+        backgrounds = [rgb(c) for c in sides(name.group(1))]
+        backdrops = [rgb(c)[:3] for c in sides("--surface")]
+        return list(zip(backgrounds, backdrops))
 
     def test_the_controls_stay_visible_against_the_slide(self, marp_client):
         """These controls exist *because* the reporter could not navigate on a
@@ -3927,21 +3963,17 @@ class TestPresentationRoundTwo:
         assert re.search(r"color:\s*#fff\b", control), (
             "the glyph is not the white this contrast is computed for"
         )
-        bg = re.search(
-            r"background:\s*rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*"
-            r"([\d.]+)\s*\)",
-            control,
-        )
-        assert bg, "the resting control has no rgba background"
-        alpha = float(bg.group(4))
-        composited = [
-            alpha * int(bg.group(i)) + (1 - alpha) * 255 for i in (1, 2, 3)
-        ]
-        ratio = self._contrast(composited, (255, 255, 255))
-        assert ratio >= 3.0, (
-            "the resting control composites to %.2f:1 on a white slide, under "
-            "the 3:1 floor for a non-text UI control" % ratio
-        )
+        # Checked on both sides of the palette (DR-8): white slide in light
+        # mode, the dark deck surface in dark mode.
+        for (r, g, b, alpha), backdrop in self._control_backgrounds(marp_client):
+            composited = [
+                alpha * c + (1 - alpha) * d for c, d in zip((r, g, b), backdrop)
+            ]
+            ratio = self._contrast(composited, (255, 255, 255))
+            assert ratio >= 3.0, (
+                "the resting control composites to %.2f:1 on a %s slide, under "
+                "the 3:1 floor for a non-text UI control" % (ratio, backdrop)
+            )
 
     def test_the_controls_live_in_the_deck_so_they_leave_with_it(
         self, marp_client

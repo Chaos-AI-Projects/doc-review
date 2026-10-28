@@ -1,15 +1,42 @@
 /* doc-review — responsive CSS */
 
 :root {
-    --bg: #fafafa;
-    --fg: #222;
-    --accent: #2563eb;
-    --border: #d1d5db;
-    --comment-bg: #fffbeb;
-    --resolved-bg: #f0fdf4;
+    /* Dark mode (DR-8).  Each colour is `light-dark(<light>, <dark>)`, and the
+     * root's `color-scheme` picks the side: the OS preference by default, or
+     * the reader's choice once theme.js sets `data-theme`.  The light values
+     * are the pre-DR-8 literals, so light mode renders exactly as before.  A
+     * custom property keeps `light-dark()` unresolved until it is used, so a
+     * subtree that pins its own `color-scheme` (the named deck themes below)
+     * resolves every variable to that side. */
+    color-scheme: light dark;
+    --bg: light-dark(#fafafa, #0d1117);
+    --fg: light-dark(#222, #e6edf3);
+    --accent: light-dark(#2563eb, #4493f8);
+    --border: light-dark(#d1d5db, #30363d);
+    --comment-bg: light-dark(#fffbeb, #2b2410);
+    --resolved-bg: light-dark(#f0fdf4, #12261b);
     --sidebar-w: 360px;
-    --line-hover: #f3f4f6;
-    --has-comment: #fef3c7;
+    --line-hover: light-dark(#f3f4f6, #1c2128);
+    --has-comment: light-dark(#fef3c7, #3b2f0c);
+    --surface: light-dark(#fff, #161b22);
+    --selected-bg: light-dark(#dbeafe, #1d3557);
+    --code-bg: light-dark(#f3f4f6, #1c2128);
+    --pre-bg: light-dark(#f6f8fa, #161b22);
+    --text-muted: light-dark(#555, #9198a1);
+    --text-meta: light-dark(#666, #8b949e);
+    --text-quote: light-dark(#57606a, #9198a1);
+    --text-faint: light-dark(#999, #7d8590);
+    --text-hint: light-dark(#9ca3af, #7d8590);
+    --quote-rule: light-dark(#d0d7de, #3d444d);
+    --mark-bg: light-dark(#fcd34d, #5c4813);
+    --warn-rule: light-dark(#d97706, #d29922);
+    --warn-bg: light-dark(#fef3c7, #3b2f0c);
+    --warn-fg: light-dark(#92400e, #e3b341);
+    --warn-edge: light-dark(#f59e0b, #d29922);
+    --ok: light-dark(#2a7, #3fb950);
+    --on-accent: light-dark(#fff, #0d1117);
+    --control-bg: light-dark(rgba(0, 0, 0, 0.5), rgba(230, 237, 243, 0.18));
+    --control-bg-focus: light-dark(rgba(0, 0, 0, 0.8), rgba(230, 237, 243, 0.32));
     --nav-w: 220px;
     /* How far body text sits right of its headings in the review view.  In
      * `rem` on purpose: the cell sets this as padding and each heading takes
@@ -19,6 +46,9 @@
      * different column and hangs h1 outside the cell entirely. */
     --md-indent: 1.5rem;
 }
+
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -33,9 +63,25 @@ body {
 header {
     padding: .5rem 1rem;
     border-bottom: 1px solid var(--border);
-    background: #fff;
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
 }
 header nav a { color: var(--accent); text-decoration: none; font-weight: 600; }
+
+.theme-toggle {
+    min-width: 2rem;
+    padding: .1rem .5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--fg);
+    font: inherit;
+    line-height: 1.4;
+    cursor: pointer;
+}
+.theme-toggle:hover { background: var(--line-hover); }
 
 main { padding: 1rem; }
 
@@ -48,7 +94,7 @@ main { padding: 1rem; }
 /* ── File header ── */
 .file-header { display: flex; align-items: baseline; gap: 1rem; margin-bottom: .75rem; flex-wrap: wrap; }
 .file-header h1 { font-size: 1.25rem; }
-.file-id { font-size: .75rem; color: #666; font-family: monospace; }
+.file-id { font-size: .75rem; color: var(--text-meta); font-family: monospace; }
 
 /* ── File navigator toggle (mobile) ── */
 .file-nav-toggle {
@@ -84,7 +130,7 @@ main { padding: 1rem; }
 }
 
 .col-toggle-btn.active {
-    background: #dbeafe;
+    background: var(--selected-bg);
     border-color: var(--accent);
 }
 
@@ -112,7 +158,7 @@ main { padding: 1rem; }
     overflow-y: auto;
     border-right: 1px solid var(--border);
     padding: .5rem 0;
-    background: #fff;
+    background: var(--surface);
     position: sticky;
     top: 0;
 }
@@ -135,7 +181,7 @@ main { padding: 1rem; }
 }
 
 .file-nav-link.active {
-    background: #dbeafe;
+    background: var(--selected-bg);
     color: var(--accent);
     font-weight: 600;
 }
@@ -167,7 +213,7 @@ main { padding: 1rem; }
     font-family: "SF Mono", "Fira Code", "Consolas", monospace;
     cursor: pointer;
     user-select: none;
-    color: #555;
+    color: var(--text-muted);
     font-weight: 600;
 }
 
@@ -190,7 +236,7 @@ main { padding: 1rem; }
     padding: .2rem .5rem;
     font-size: .8rem;
     font-weight: 600;
-    color: #555;
+    color: var(--text-muted);
 }
 
 .toc-list {
@@ -247,7 +293,7 @@ main { padding: 1rem; }
 
 .source-line:hover { background: var(--line-hover); }
 .source-line.has-comments { background: var(--has-comment); }
-.source-line.active { background: #dbeafe; }
+.source-line.active { background: var(--selected-bg); }
 
 .line-num {
     display: none;
@@ -303,7 +349,7 @@ main { padding: 1rem; }
 .standalone-document blockquote {
     padding-left: 1.5em;
     border-left: 3px solid var(--border);
-    color: #57606a;
+    color: var(--text-quote);
 }
 
 /* ── List indent inside source lines ── */
@@ -360,7 +406,7 @@ main { padding: 1rem; }
  * the one inline element that keeps the whitespace mode the cell gave up. */
 .line-content code,
 .standalone-document code {
-    background: #f3f4f6;
+    background: var(--code-bg);
     padding: .1em .3em;
     border-radius: 3px;
     font-family: "SF Mono", "Fira Code", "Consolas", monospace;
@@ -371,7 +417,7 @@ main { padding: 1rem; }
 /* ── Fenced code blocks (<pre><code> from markdown parser) ── */
 .line-content pre,
 .standalone-document pre {
-    background: #f3f4f6;
+    background: var(--code-bg);
     padding: .5em .75em;
     border-radius: 4px;
     overflow-x: auto;
@@ -406,11 +452,18 @@ main { padding: 1rem; }
 .line-content .mermaid,
 .presentation .slide .mermaid,
 .standalone-document .mermaid {
-    background: #fff;
+    background: var(--surface);
     padding: .25em 0;
     white-space: pre;
     overflow-x: auto;
 }
+
+/* The deck draws its diagrams with mermaid's light theme in every deck theme
+ * (view.html), so their box stays white, and on the default deck in dark mode
+ * the pre-render source needs dark text too.  Review mode follows the page
+ * theme instead (DR-8). */
+.presentation .slide .mermaid { background: #fff; }
+.presentation.theme-default .slide .mermaid { color: #222; }
 
 .line-content .mermaid svg,
 .presentation .slide .mermaid svg,
@@ -472,7 +525,7 @@ main { padding: 1rem; }
 .presentation .slide th,
 .standalone-document th {
     text-align: inherit;
-    background: #f3f4f6;
+    background: var(--code-bg);
     font-weight: 600;
 }
 
@@ -521,7 +574,7 @@ main { padding: 1rem; }
 
 .marker-btn {
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     border: none;
     border-radius: 50%;
     width: 1.5em;
@@ -539,12 +592,12 @@ main { padding: 1rem; }
     overflow-y: auto;
     border-left: 1px solid var(--border);
     padding: .75rem;
-    background: #fff;
+    background: var(--surface);
     position: sticky;
     top: 0;
 }
 
-.sidebar-hint { color: #9ca3af; font-size: .85rem; }
+.sidebar-hint { color: var(--text-hint); font-size: .85rem; }
 
 /* ── Comment cards ── */
 .comment-card {
@@ -557,22 +610,22 @@ main { padding: 1rem; }
 }
 .comment-card.resolved { background: var(--resolved-bg); opacity: .7; }
 
-.comment-meta { color: #666; font-size: .75rem; margin-bottom: .25rem; }
+.comment-meta { color: var(--text-meta); font-size: .75rem; margin-bottom: .25rem; }
 .comment-body { white-space: pre-wrap; }
 
 /* DR-7: the span a comment is anchored to.  The row is already tinted
    --has-comment, so the mark needs a stronger amber plus an underline to read
    as "this part" rather than "this block". */
 mark.comment-quote {
-    background: #fcd34d;
+    background: var(--mark-bg);
     color: inherit;
-    border-bottom: 2px solid #d97706;
+    border-bottom: 2px solid var(--warn-rule);
     padding: 0;
 }
 .comment-quote-text,
 .comment-quote-preview {
-    border-left: 3px solid #d97706;
-    color: #555;
+    border-left: 3px solid var(--warn-rule);
+    color: var(--text-muted);
     font-style: italic;
     margin: .15rem 0 .35rem;
     padding-left: .5rem;
@@ -603,8 +656,8 @@ mark.comment-quote {
 
 .detached-badge {
     display: inline-block;
-    background: #fef3c7;
-    color: #92400e;
+    background: var(--warn-bg);
+    color: var(--warn-fg);
     padding: .1rem .35rem;
     border-radius: 3px;
     font-size: .7rem;
@@ -612,12 +665,12 @@ mark.comment-quote {
 }
 
 .comment-card.detached {
-    border-left: 3px solid #f59e0b;
+    border-left: 3px solid var(--warn-edge);
 }
 
 .reply-badge {
     display: inline-block;
-    background: #dbeafe;
+    background: var(--selected-bg);
     color: var(--accent);
     padding: .1rem .35rem;
     border-radius: 3px;
@@ -648,8 +701,8 @@ mark.comment-quote {
     cursor: pointer;
     font-size: .85rem;
 }
-.comment-form button[type="submit"] { background: var(--accent); color: #fff; border-color: var(--accent); }
-.cancel-btn { background: #fff; }
+.comment-form button[type="submit"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.cancel-btn { background: var(--surface); color: var(--fg); }
 
 /* ── Inline comments (mobile) ── */
 .inline-comments {
@@ -691,7 +744,7 @@ mark.comment-quote {
     .inline-comments {
         display: block;
         padding: .5rem;
-        background: #fff;
+        background: var(--surface);
         border-top: 1px solid var(--border);
     }
 
@@ -701,11 +754,11 @@ mark.comment-quote {
 /* Pyodide renderer status indicator (#445) */
 .pyodide-status {
     font-size: 0.75rem;
-    color: #999;
+    color: var(--text-faint);
     margin-left: 0.5rem;
 }
-.pyodide-status.ready { color: #2a7; }
-.pyodide-status.fallback { color: #999; }
+.pyodide-status.ready { color: var(--ok); }
+.pyodide-status.fallback { color: var(--text-faint); }
 
 /* ── Marp presentation mode (#452) ──
  *
@@ -722,7 +775,8 @@ body.presenting { overflow: hidden; }
 .presentation {
     position: fixed;
     inset: 0;
-    background: #fff;
+    background: var(--surface);
+    color: var(--fg);
     z-index: 100;
     display: flex;
     align-items: center;
@@ -736,7 +790,7 @@ body.presenting { overflow: hidden; }
 }
 /* Real full screen is requested by app.js; :fullscreen only has to keep the
  * theme background, since the browser paints its own backdrop behind it. */
-.presentation:fullscreen { background: #fff; }
+.presentation:fullscreen { background: var(--surface); }
 .presentation.theme-gaia:fullscreen { background: #fffefb; }
 
 /* On-screen controls (#455): the pointer equivalent of the keyboard actions,
@@ -769,11 +823,11 @@ body.presenting { overflow: hidden; }
      * and no focus before the first tap, so the resting state is the only one
      * that counts: these controls exist *because* the reporter could not
      * navigate on a phone, and an invisible control is the same bug again. */
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--control-bg);
     transition: background-color 0.15s ease;
 }
 .presentation-control:hover,
-.presentation-control:focus { background: rgba(0, 0, 0, 0.8); outline: none; }
+.presentation-control:focus { background: var(--control-bg-focus); outline: none; }
 
 /* Along the edges, over the slide's own padding: prev/next fall under the
  * thumbs, exit stays clear of .slide-number in the bottom-right corner. */
@@ -824,10 +878,10 @@ body.presenting { overflow: hidden; }
     font: inherit;
     font-size: .95rem;
     cursor: pointer;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--control-bg);
 }
 .view-toggle:hover,
-.view-toggle:focus { background: rgba(0, 0, 0, 0.8); outline: none; }
+.view-toggle:focus { background: var(--control-bg-focus); outline: none; }
 
 .standalone-document {
     max-width: 50rem;
@@ -866,7 +920,7 @@ body.presenting { overflow: hidden; }
 .presentation .slide pre {
     font-size: 0.75em;
     overflow: auto;
-    background: #f6f8fa;
+    background: var(--pre-bg);
     padding: 0.75em;
     border-radius: 4px;
 }
@@ -877,10 +931,21 @@ body.presenting { overflow: hidden; }
     bottom: 40px;
     right: 56px;
     font-size: 20px;
-    color: #999;
+    color: var(--text-faint);
 }
 
 /* Themes are constrained to this set by view_specs.PRESENTATION_THEMES. */
+/* A named theme is an author's chosen palette, so it keeps that palette in
+ * both modes: pinning the scheme resolves every variable inside the deck to
+ * its light side, exactly as before DR-8.  Only the default deck follows the
+ * reader's theme. */
+.presentation.theme-gaia,
+.presentation.theme-uncover,
+.presentation.theme-swiss-modern,
+.presentation.theme-paper-ink,
+.presentation.theme-dark-botanical,
+.presentation.theme-vintage-editorial { color-scheme: light; }
+
 .presentation.theme-gaia { background: #fffefb; color: #2c2c2c; }
 .presentation.theme-gaia .slide h1 { color: #1a4f9c; }
 .presentation.theme-uncover { background: #fff; text-align: center; }
@@ -894,7 +959,7 @@ body.presenting { overflow: hidden; }
 .presentation .slide.layout-title h1 { font-size: 3.2em; margin-bottom: 0.2em; }
 .presentation .slide.layout-title h2 { font-size: 1.5em; font-weight: normal; }
 /* Subtitle weight without hiding it: #57606a on white is 4.6:1. */
-.presentation .slide.layout-title p { font-size: 1.15em; color: #57606a; }
+.presentation .slide.layout-title p { font-size: 1.15em; color: var(--text-quote); }
 
 /* Title-slide staggered reveal (DR-2): each block rises in a beat after the
  * one before it.  It replays on every visit, because showing a slide flips it
@@ -929,15 +994,15 @@ body.presenting { overflow: hidden; }
     font-size: 1.5em;
     font-style: italic;
     line-height: 1.5;
-    border-left: 4px solid #d0d7de;
+    border-left: 4px solid var(--quote-rule);
     padding-left: 0.8em;
 }
 
 /* Front matter shown as metadata rather than a bogus setext heading (#452). */
 pre.front-matter {
-    background: #f6f8fa;
-    border-left: 3px solid #d0d7de;
-    color: #57606a;
+    background: var(--pre-bg);
+    border-left: 3px solid var(--quote-rule);
+    color: var(--text-quote);
     font-size: 0.85em;
     padding: 0.5em 0.75em;
     margin: 0;

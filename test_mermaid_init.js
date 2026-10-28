@@ -43,6 +43,12 @@ function node(tag, className, children) {
         textContent: "",
         style: {},
         innerHTML: null,
+        attributes: {},
+        getAttribute: function (name) {
+            return Object.prototype.hasOwnProperty.call(this.attributes, name)
+                ? this.attributes[name] : null;
+        },
+        setAttribute: function (name, value) { this.attributes[name] = String(value); },
         querySelectorAll: function (sel) { return queryAll(this, sel); },
         querySelector: function (sel) { return queryAll(this, sel)[0] || null; },
     };
@@ -206,6 +212,27 @@ var pending = [];
                 seen, ["graph TD\n    DECK-->ONLY"]);
             assert("scoped: the review container was left alone",
                 body.querySelectorAll(".mermaid")[0].innerHTML, null);
+        })
+    );
+})();
+
+// 5. A theme switch re-renders diagrams that are already drawn (DR-8).  Once a
+//    container holds SVG its textContent is the SVG's text, not the source, so
+//    the second render must use the source kept from the first.
+(function () {
+    var seen = [];
+    var review = reviewDom(["graph TD\n    A-->B"]);
+    var container = review.querySelector(".mermaid");
+    var render = recordingRender(seen);
+    pending.push(
+        mermaidInit.renderMermaid(review, render).then(function () {
+            // What the browser leaves behind: the SVG's own text nodes.
+            container.textContent = "AB";
+            return mermaidInit.renderMermaid(review, render);
+        }).then(function (n) {
+            assert("re-render: the container was drawn again", n, 1);
+            assertDeep("re-render: both renders were handed the original source",
+                seen, ["graph TD\n    A-->B", "graph TD\n    A-->B"]);
         })
     );
 })();
