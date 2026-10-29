@@ -99,12 +99,20 @@ class Browser:
             f"--window-size={width},{height}",
             "about:blank",
         ]
-        # The shell puts the two pipe ends on fds 3 and 4, where Chromium
-        # looks for them, then gets out of the way.
-        shim = f'exec "$0" "$@" 3<&{to_child_r} 4>&{from_child_w}'
+
+        def onto_3_and_4():
+            # Chromium looks for the pipe ends on fds 3 and 4.  Copy both
+            # out of the way first, so neither dup2 can clobber the other.
+            # No shell does this: dash rejects fd numbers above 9.
+            r, w = os.dup(to_child_r), os.dup(from_child_w)
+            os.dup2(r, 3)
+            os.dup2(w, 4)
+
         self._proc = subprocess.Popen(
-            ["sh", "-c", shim, chromium, *args],
-            pass_fds=(to_child_r, from_child_w),
+            [chromium, *args],
+            # close_fds runs after preexec_fn, so 3 and 4 must be kept.
+            preexec_fn=onto_3_and_4,
+            pass_fds=(3, 4),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

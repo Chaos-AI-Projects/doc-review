@@ -190,6 +190,26 @@ class TestBrowserPipe:
             browser.open("http://h:1/view?path=d.md")
             assert browser.evaluate("1") == {"slides": 1, "overflowing": []}
 
+    def test_starts_without_a_shell(self, tmp_path, monkeypatch):
+        # Debian's /bin/sh is dash, which rejects a redirect like 3<&12
+        # because the fd number is above 9.  This sh fails the way dash does,
+        # so the browser must reach fds 3 and 4 without going through one.
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        sh = bindir / "sh"
+        sh.write_text(
+            f"#!{sys.executable}\n"
+            "import sys\n"
+            "sys.stderr.write('sh: 1: Syntax error: Bad fd number\\n')\n"
+            "sys.exit(2)\n"
+        )
+        sh.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+        fake = _fake(tmp_path, FAKE_BROWSER.format(python=sys.executable))
+        with fit_check.Browser(fake, timeout=5) as browser:
+            browser.open("http://h:1/view?path=d.md")
+            assert browser.evaluate("1") == {"slides": 1, "overflowing": []}
+
     def test_browser_that_dies_at_start_is_unmeasured(self, tmp_path):
         # Exit 1 means "a slide overflows", so a dead browser must not reach
         # it as an uncaught BrokenPipeError.
