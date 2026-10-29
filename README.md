@@ -400,6 +400,21 @@ keyboard resolves through the same dispatcher:
 - Previous slide: `←`, `↑`, `PageUp`
 - Exit to review: `Esc`
 
+### Checking a deck fits
+
+`fit_check.py` lists the slides that overflow the 1920x1080 stage, for checking a deck before it is
+sent. It opens the deck on a running server in headless Chromium, presses Present, and reads the
+answer from `deck_dom.js` `checkFit()`, so the measurement is the browser's own layout.
+
+```bash
+python3 fit_check.py drafts/presentation-12-talk.md          # text report
+python3 fit_check.py --json --base http://127.0.0.1:28080 deck.md
+```
+
+It exits 0 when every slide fits, 1 when one overflows, and 2 when nothing could be measured. It
+needs `chromium` on PATH and the network, because the page boots Pyodide and mermaid from their
+CDNs.
+
 ## Architecture
 
 - **Server:** FastAPI, server-rendered HTML (Jinja2), minimal vanilla JS
@@ -425,6 +440,7 @@ comment-loss incident.
 ```
 doc-review/
 ├── server.py          # FastAPI app + CLI entrypoint
+├── fit_check.py       # Headless-Chromium deck fit check (DR-13)
 ├── db.py              # SQLite data layer (comments CRUD)
 ├── file_id.py         # File identity derivation (git blob / content hash)
 ├── renderer.py        # Markdown → per-block HTML renderer (markdown-it-py)
