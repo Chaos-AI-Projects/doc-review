@@ -121,9 +121,6 @@
             for (var i = 0; i < list.length; i++) {
                 list[i].hidden = i !== index;
             }
-            /* Re-judged on every visit, as in app.js (DR-10).  flagSlide
-             * leaves a slide in a hidden deck alone. */
-            if (list[index]) deckDom.flagSlide(doc, list[index]);
         }
 
         /* The ONE place an action is carried out, as in app.js: keys and
@@ -159,9 +156,6 @@
             /* A hidden deck measures 0x0, so a resize while the document was
              * showing left it at scale 1: refit before anyone sees it. */
             if (view === "slides" && stageFit) stageFit.fit();
-            /* The fit check (DR-10) needs the deck laid out, so it runs
-             * whenever the slides come into view. */
-            if (view === "slides" && deckEl) deckDom.checkFit(doc, deckEl);
             /* The focus follows the view.  A click leaves it on the toggle in
              * Chrome, and Space would then press the toggle again instead of
              * scrolling the document. */
@@ -194,10 +188,6 @@
 
             showSlide(0);
             setView(startView);  // focuses whichever view is showing
-            /* Late images and web fonts re-judge what they resize (DR-10).
-             * After the first layout, so the theme fonts are already loading
-             * and fonts.ready waits for them. */
-            deckDom.watchFit(doc, deckEl);
             return deckEl;
         }
 

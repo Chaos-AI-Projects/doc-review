@@ -193,6 +193,24 @@ class TestSlideFit:
                     offenders.append((sel, prop))
         assert offenders == []
 
+    def test_viewers_never_see_the_fit_check(self):
+        """DR-16: whoever opens a deck is a viewer, not its author.
+
+        The author is an agent, and fit_check.py tells it which slides
+        overflow.  A flag on the slide only ever reached the viewer, who
+        cannot fix it, so no page runs the check and no style draws one.
+        """
+        static = HERE / "static"
+        for name in ("app.js", "standalone.js"):
+            src = (static / name).read_text()
+            # The helpers DR-10 put in the pages, by name, so a caller left
+            # behind is caught here: no JS test drives app.js into a deck.
+            for gone in ("checkFit", "checkDeckFit", "flagSlide", "watchFit",
+                         "fit-flag"):
+                assert gone not in src, (name, gone)
+        assert "fit-flag" not in CSS
+        assert not any(".overflowing" in sel for sel, _ in rules(CSS))
+
 
 def _px(body, prop):
     """The last ``prop: Npx`` declared in *body*, as a number, or 0."""

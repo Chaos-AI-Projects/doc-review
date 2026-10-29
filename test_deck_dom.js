@@ -375,87 +375,40 @@ function stubDeck(slides) {
     var a = laidOut(fits), b = laidOut(tall), c = laidOut(wide);
     a.hidden = false;
     var deck = stubDeck([a, b, c]);
-    var over = deckDom.checkFit(fakeDocument, deck);
+    var over = deckDom.checkFit(deck);
     assertDeep("fit check: lists the overflowing slides by number", over, [2, 3]);
     assertDeep("fit check: visibility restored",
         [a.hidden, b.hidden, c.hidden], [false, true, true]);
 
-    function flags(s) { return queryAll(s, ".fit-flag"); }
-    assert("fit check: a fitting slide carries no flag", flags(a).length, 0);
-    assert("fit check: an overflowing slide is flagged", flags(b).length, 1);
-    assert("fit check: the flag says by how much and what to do",
-        flags(b)[0].textContent, "Overflows the slide by 240px -- split it");
-    assert("fit check: the slide is marked",
-        b.className.split(/\s+/).indexOf("overflowing") !== -1, true);
+    // The check only measures.  The viewer is not the deck's author, so
+    // nothing on the slide may change (DR-16): fit_check.py reads the list.
+    var flagged = queryAll(deck, ".fit-flag").length;
+    assert("fit check: no slide gets a flag", flagged, 0);
+    assertDeep("fit check: no slide gets a mark",
+        [a.className, b.className, c.className],
+        ["slide layout-default", "slide layout-default", "slide layout-default"]);
 
-    // Re-checking is how a slide whose image or diagram finished late gets
-    // judged on its final size, so it must be idempotent and must clear a
-    // flag that no longer applies.
-    deckDom.checkFit(fakeDocument, deck);
-    assert("fit check: re-check keeps one flag", flags(b).length, 1);
-    tall.h = 1080;
-    deckDom.checkFit(fakeDocument, deck);
-    assert("fit check: a slide that now fits loses its flag", flags(b).length, 0);
-    assert("fit check: and its mark",
-        b.className.split(/\s+/).indexOf("overflowing"), -1);
-    assert("fit check: other classes survive", b.className, "slide layout-default");
-
-    // flagSlide re-judges one slide, for the review app's per-slide re-check.
-    tall.h = 1500;
-    b.hidden = false;
-    assert("fit check: flagSlide returns the overflow", deckDom.flagSlide(fakeDocument, b), 420);
-    assert("fit check: flagSlide flags", flags(b).length, 1);
-    // A slide that is not laid out (hidden, or in a hidden deck) measures
-    // 0x0, which would read as "fits" and clear a real flag.
-    b.hidden = true;
-    assert("fit check: flagSlide skips an unmeasured slide", deckDom.flagSlide(fakeDocument, b), null);
-    assert("fit check: and keeps its flag", flags(b).length, 1);
+    // A slide that is not laid out measures 0x0, which would read as "fits".
+    // It is left out of the list rather than counted either way.
+    var gone = laidOut(tall, { w: 0, h: 0 });
+    var deck2 = stubDeck([gone, laidOut(tall)]);
+    assertDeep("fit check: an unmeasured slide is not listed",
+        deckDom.checkFit(deck2), [2]);
 
     // A hidden deck (the standalone page's markdown view) measures 0x0 and
-    // says nothing about its slides.  Report "unknown", and leave every
-    // existing flag alone rather than clearing it on a non-measurement.
+    // says nothing about its slides, so the answer is "unknown".
     deck.clientWidth = 0; deck.clientHeight = 0;
-    assert("fit check: a hidden deck is not measured", deckDom.checkFit(fakeDocument, deck), null);
-    assert("fit check: and keeps its flags", flags(b).length, 1);
+    assert("fit check: a hidden deck is not measured", deckDom.checkFit(deck), null);
 })();
 
-// 12. buildDeck's slides start unflagged: the fit check can only judge a
-//     slide after the browser has laid it out.
+// 12. Only the measurement is exported.  The viewer-side flagging (DR-10)
+//     is gone, so a page cannot bring it back by calling it (DR-16).
 (function () {
-    var deck = deckDom.buildDeck(fakeDocument, specs());
-    assert("fit check: a fresh deck has no flags", queryAll(deck, ".fit-flag").length, 0);
+    assert("fit check: no flagSlide", typeof deckDom.flagSlide, "undefined");
+    assert("fit check: no watchFit", typeof deckDom.watchFit, "undefined");
 })();
 
-// 13. watchFit re-judges what changes size after the deck-wide check: a
-//     slide whose image loads, and the whole deck once web fonts swap in.
-(function () {
-    var content = { w: 1920, h: 1080 };
-    var s = laidOut(content);
-    s.hidden = false;
-    var deck = stubDeck([s]);
-    var ready = null;
-    var doc = { createElement: fakeDocument.createElement,
-                fonts: { ready: { then: function (fn) { ready = fn; } } } };
-    deckDom.watchFit(doc, deck);
-    var onLoad = (deck.listeners.load || [])[0];
-    assert("watch: listens for load", typeof onLoad, "function");
-
-    content.h = 1200;
-    var img = { closest: function (sel) { return sel === "section.slide" ? s : null; } };
-    onLoad({ target: img });
-    assert("watch: an image load re-judges its slide", queryAll(s, ".fit-flag").length, 1);
-
-    content.h = 1080;
-    ready();
-    assert("watch: fonts.ready re-checks the deck", queryAll(s, ".fit-flag").length, 0);
-
-    // A load from something outside any slide, or a document without the
-    // font API, is ignored rather than thrown on.
-    onLoad({ target: { closest: function () { return null; } } });
-    deckDom.watchFit(fakeDocument, stubDeck([]));
-})();
-
-// 14. A slide with regions (DR-11, two-column) nests each row in the region
+// 13. A slide with regions (DR-11, two-column) nests each row in the region
 //     whose start/end slice holds it, in order.  The region names are
 //     view_specs' own, so nothing here inspects the layout.  A slide with no
 //     regions keeps its rows directly under the section, as before.
@@ -495,14 +448,14 @@ function stubDeck(slides) {
         sections[1].children[0].className, "slide-block");
 })();
 
-// 15. Specs from before DR-11 carry no `regions` key at all, and still build.
+// 14. Specs from before DR-11 carry no `regions` key at all, and still build.
 (function () {
     var deck = deckDom.buildDeck(fakeDocument, specs());
     assert("regions: absent key builds flat",
         deck.querySelectorAll("section.slide")[1].children[0].className, "slide-block");
 })();
 
-// 16. Slide chrome (DR-12): a top bar naming the deck and a footer line on
+// 15. Slide chrome (DR-12): a top bar naming the deck and a footer line on
 //     every slide, carrying the text view_specs settled.  textContent, never
 //     innerHTML, because the text is the deck author's front matter.
 (function () {
@@ -519,7 +472,7 @@ function stubDeck(slides) {
         deck.querySelectorAll("div.slide-block").length, 3);
 })();
 
-// 17. An empty top bar is left out; the footer line stays, as the frame's
+// 16. An empty top bar is left out; the footer line stays, as the frame's
 //     bottom edge.
 (function () {
     var deck = deckDom.buildDeck(fakeDocument,
@@ -530,7 +483,7 @@ function stubDeck(slides) {
         deck.querySelectorAll("div.slide-footer").length, 2);
 })();
 
-// 18. Chrome off, or specs from before DR-12 with no key: no frame at all.
+// 17. Chrome off, or specs from before DR-12 with no key: no frame at all.
 (function () {
     [specs({ chrome: null }), specs()].forEach(function (s, i) {
         var deck = deckDom.buildDeck(fakeDocument, s);

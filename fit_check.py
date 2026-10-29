@@ -270,7 +270,7 @@ MEASURE_JS = r"""
     // Let the layout settle after the last diagram lands.
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     const d = window.docReviewDeck;
-    const over = d.checkFit(document, deck);
+    const over = d.checkFit(deck);
     if (over === null) return {error: "the deck was not laid out, so nothing was measured"};
     const sections = deck.querySelectorAll("section.slide");
     const overflowing = over.map((n) => {

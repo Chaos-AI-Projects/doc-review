@@ -987,26 +987,6 @@ body.presenting { overflow: hidden; }
 }
 .presentation .slide img { max-width: 100%; }
 
-/* The fit check's flag (DR-10), on a slide whose content overflows the
- * stage.  Absolutely positioned, so it adds nothing to the height it reports
- * on, and in the top-left corner, which no control or page number uses.  It
- * covers the start of the slide chrome's top bar (DR-12) on purpose: the
- * warning outranks the deck's name. */
-.presentation .slide .fit-flag {
-    position: absolute;
-    top: 24px;
-    left: 32px;
-    z-index: 1;
-    padding: 6px 14px;
-    border-radius: 6px;
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--warn-fg);
-    background: var(--warn-bg);
-    border: 2px solid var(--warn-edge);
-}
-.presentation .slide.overflowing { outline: 6px solid var(--warn-edge); outline-offset: -6px; }
-
 .presentation .slide-number {
     position: absolute;
     bottom: 40px;
