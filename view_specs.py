@@ -436,8 +436,14 @@ def header_fields(data):
     The form fields must follow the file on screen, or comments would be
     posted against the previously viewed one.
     """
+    path = data["path"]
+    # DR-14: the title row links the folder part home, so the two halves are
+    # rendered apart.  A file at the root has an empty folder.
+    folder, _, name = path.rpartition("/")
     return {
-        "title": data["path"],
+        "title": path,
+        "titleFolder": folder + "/" if folder else "",
+        "titleName": name,
         "fileIdLabel": str(data["file_id"])[:12] + "\u2026",
         "documentTitle": "doc-review \u2014 " + data["path"],
         "formFileId": data["file_id"],

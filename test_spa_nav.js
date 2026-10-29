@@ -217,6 +217,23 @@ assert("isDownload md", nav.isDownload("x.md"), false);
 assert("isDownload dotted dir", nav.isDownload("a.pdf/x.md"), false);
 assert("downloadUrl", nav.downloadUrl("a b/c.pdf"), "/download?path=a%20b%2Fc.pdf");
 
+// ── Files panel (DR-14): when does an event close it? ──
+function pe(over) {
+    var base = { type: "click", key: "", inPanel: false, onToggle: false, onLink: false };
+    for (var k in over) if (over.hasOwnProperty(k)) base[k] = over[k];
+    return base;
+}
+assert("Escape closes", nav.filesPanelCloses(pe({ type: "keydown", key: "Escape" })), true);
+assert("other key keeps", nav.filesPanelCloses(pe({ type: "keydown", key: "a" })), false);
+assert("typing in the filter keeps",
+    nav.filesPanelCloses(pe({ type: "keydown", key: "x", inPanel: true })), false);
+assert("click outside closes", nav.filesPanelCloses(pe({})), true);
+assert("click in panel keeps", nav.filesPanelCloses(pe({ inPanel: true })), false);
+assert("click on a file link closes",
+    nav.filesPanelCloses(pe({ inPanel: true, onLink: true })), true);
+assert("click on the Files button is the button's own toggle",
+    nav.filesPanelCloses(pe({ onToggle: true })), false);
+
 // ── Report ──
 
 if (failures.length > 0) {

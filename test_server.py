@@ -413,6 +413,107 @@ class TestColumnToggles:
         assert 'class="col-toggles"' in resp.text
 
 
+class TestFileBrowserOffTheDocument:
+    """DR-14 (Chaos picked option B plus a Files button): the left column keeps
+    only Contents, the title row links the folder home, and the file tree and
+    filter sit in a Files panel that is closed until the Files button opens it.
+    """
+
+    def _view(self, client, path="sub/nested.md"):
+        resp = client.get("/view?path=" + path)
+        assert resp.status_code == 200
+        return resp.text
+
+    def _block(self, html, pattern):
+        m = re.search(pattern, html, re.S)
+        assert m, pattern
+        return m.group(0)
+
+    def test_contents_column_holds_no_file_tree(self, client):
+        nav = self._block(self._view(client), r'<nav class="file-nav".*?</nav>')
+        assert 'id="file-nav-tree"' not in nav
+        assert 'id="nav-filter"' not in nav
+
+    def test_files_panel_holds_the_tree_and_filter(self, client):
+        panel = self._block(
+            self._view(client), r'<div class="files-panel"[^>]*>.*?\n    </div>'
+        )
+        assert 'id="file-nav-tree"' in panel
+        assert 'id="nav-filter"' in panel
+
+    def test_files_panel_starts_closed(self, client):
+        opening = self._block(self._view(client), r'<div class="files-panel"[^>]*>')
+        assert 'id="files-panel"' in opening
+        assert re.search(r"\bhidden\b", opening), opening
+
+    def test_files_button_controls_the_panel(self, client):
+        button = self._block(self._view(client), r'<button[^>]*id="nav-toggle"[^>]*>')
+        assert 'aria-controls="files-panel"' in button
+        assert 'aria-expanded="false"' in button
+
+    def test_files_button_shows_on_desktop(self, client):
+        css = client.get("/static/style.css").text
+        m = re.search(r"(?m)^\.file-nav-toggle\s*\{([^}]+)\}", css)
+        assert m, "no .file-nav-toggle rule"
+        assert not re.search(r"display:\s*none", m.group(1)), m.group(1)
+
+    def test_column_toggle_is_named_contents(self, client):
+        button = self._block(
+            self._view(client), r'<button[^>]*id="nav-col-toggle"[^>]*>[^<]*</button>'
+        )
+        assert "Contents" in button
+        assert "Nav" not in button.split(">", 1)[1]
+
+    def test_title_links_the_folder_home(self, client):
+        h1 = self._block(self._view(client), r"<h1[^>]*>.*?</h1>")
+        assert re.search(r'<a [^>]*href="/"[^>]*>sub/</a>', h1), h1
+        assert "nested.md" in h1
+
+    def test_root_file_title_has_no_folder_link(self, client):
+        h1 = self._block(self._view(client, "test.md"), r"<h1[^>]*>.*?</h1>")
+        assert "<a " not in h1, h1
+        assert "test.md" in h1
+
+    def test_files_panel_script_loads_after_nav_logic(self, client):
+        """files_panel.js asks nav_logic.js when to close, so it must load
+        after it."""
+        html = self._view(client)
+        logic = html.index("/static/nav_logic.js")
+        panel = html.index("/static/files_panel.js")
+        assert logic < panel
+        assert client.get("/static/files_panel.js").status_code == 200
+
+    def test_empty_contents_column_collapses(self, client):
+        """A document with no headings would otherwise leave a blank column
+        where the tree used to be."""
+        css = client.get("/static/style.css").text
+        assert re.search(
+            r"\.file-nav:not\(:has\(\.toc-section\)\)[,\s]", css
+        )
+        rule = re.search(
+            r"(?m)^\.file-nav:not\(:has\(\.toc-section\)\)\s*\{([^}]*)\}", css
+        )
+        assert rule and re.search(r"display:\s*none", rule.group(1)), rule
+        # ... and its button goes with it, or it toggles an empty column.
+        button = re.search(
+            r"(?m)^body:not\(:has\(\.file-nav \.toc-section\)\) #nav-col-toggle"
+            r"\s*\{([^}]*)\}", css
+        )
+        assert button and re.search(r"display:\s*none", button.group(1)), button
+
+    def test_no_has_nested_inside_has(self, client):
+        """:has() inside :has() is invalid CSS, and one invalid selector drops
+        its whole rule (DR-14 round-2 review)."""
+        css = client.get("/static/style.css").text
+        for m in re.finditer(r":has\(", css):
+            depth, i = 1, m.end()
+            while depth and i < len(css):
+                if css.startswith(":has(", i):
+                    raise AssertionError("nested :has() at offset %d" % m.start())
+                depth += {"(": 1, ")": -1}.get(css[i], 0)
+                i += 1
+
+
 class TestQuietHeader:
     """DR-9: the file-id hash and the renderer status are debug info, so they
     sit behind a closed disclosure instead of beside the toggle buttons."""

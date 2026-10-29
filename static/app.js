@@ -13,15 +13,10 @@
     var presenting = false;  // presentation mode is read-only (#452)
     var quoteLogic = window.docReviewQuote;  // selection anchors (DR-7)
 
-    /* ── File navigator toggle (mobile) ── */
+    /* The Files button and its panel live in static/files_panel.js (DR-14).
+     * On a phone the Contents column opens from its own button below. */
 
-    var navToggle = document.getElementById("nav-toggle");
     var fileNav = document.getElementById("file-nav");
-    if (navToggle && fileNav) {
-        navToggle.addEventListener("click", function () {
-            fileNav.classList.toggle("open");
-        });
-    }
 
     /* ── Column hide/show toggles ── */
 
@@ -29,11 +24,22 @@
     var commentsColToggle = document.getElementById("comments-col-toggle");
     var commentSidebar = document.getElementById("sidebar");
 
+    // Desktop shows Contents and the button hides it.  Phones hide it in CSS
+    // and the button opens it (DR-14: the Files button used to do that).
+    // The width is read per click, so a rotated phone keeps a working button.
     if (navColToggle && fileNav) {
-        navColToggle.classList.add("active");
+        var narrow = window.matchMedia("(max-width: 768px)");
+        var contentsShown = function () {
+            return narrow.matches ? fileNav.classList.contains("open")
+                : !fileNav.classList.contains("col-hidden");
+        };
+        navColToggle.classList.toggle("active", contentsShown());
         navColToggle.addEventListener("click", function () {
-            fileNav.classList.toggle("col-hidden");
-            navColToggle.classList.toggle("active");
+            fileNav.classList.toggle(narrow.matches ? "open" : "col-hidden");
+            navColToggle.classList.toggle("active", contentsShown());
+        });
+        narrow.addEventListener("change", function () {
+            navColToggle.classList.toggle("active", contentsShown());
         });
     }
 
@@ -478,7 +484,22 @@
     function updateHeader(renderer, data) {
         var fields = renderer.headerFields(data);
         var title = document.querySelector(".file-header h1");
-        if (title) title.textContent = fields.title;
+        if (title) {
+            // Same shape as view.html: the folder links home (DR-14).
+            title.textContent = "";
+            if (fields.titleFolder) {
+                var folder = document.createElement("a");
+                folder.className = "title-folder";
+                folder.href = "/";
+                folder.title = "All files";
+                folder.textContent = fields.titleFolder;
+                title.appendChild(folder);
+            }
+            var name = document.createElement("span");
+            name.className = "title-name";
+            name.textContent = fields.titleName;
+            title.appendChild(name);
+        }
         var fidEl = document.querySelector(".file-header .file-id");
         if (fidEl) fidEl.textContent = fields.fileIdLabel;
         document.title = fields.documentTitle;

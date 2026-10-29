@@ -119,6 +119,17 @@ class TestHeaderFields:
     def test_title_is_the_path(self, fields):
         assert fields["title"] == "kb/wiki/log.md"
 
+    def test_title_splits_into_folder_and_name(self, fields):
+        """DR-14: the title row links the folder part home, so it needs the
+        folder and the file name apart."""
+        assert fields["titleFolder"] == "kb/wiki/"
+        assert fields["titleName"] == "log.md"
+
+    def test_root_file_has_no_folder(self):
+        fields = header_fields({"path": "README.md", "file_id": "0" * 32})
+        assert fields["titleFolder"] == ""
+        assert fields["titleName"] == "README.md"
+
     def test_file_id_truncated_to_12_chars_plus_ellipsis(self, fields):
         assert fields["fileIdLabel"] == "0123456789ab\u2026"
 

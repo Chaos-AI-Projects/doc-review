@@ -2,10 +2,11 @@
 {% block title %}{{ header.documentTitle }}{% endblock %}
 {% block content %}
 <div class="file-header">
-    <h1>{{ header.title }}</h1>
-    <button class="file-nav-toggle" id="nav-toggle" title="Toggle file navigator">&#9776; Files</button>
+    {# DR-14: the folder part links back to the file list on the home page. #}
+    <h1>{% if header.titleFolder %}<a class="title-folder" href="/" title="All files">{{ header.titleFolder }}</a>{% endif %}<span class="title-name">{{ header.titleName }}</span></h1>
+    <button class="file-nav-toggle" id="nav-toggle" type="button" title="Open another document" aria-controls="files-panel" aria-expanded="false">&#128193; Files</button>
     <span class="col-toggles">
-        <button id="nav-col-toggle" class="col-toggle-btn" title="Toggle navigator column">&#9776; Nav</button>
+        <button id="nav-col-toggle" class="col-toggle-btn" title="Toggle the Contents column">&#9776; Contents</button>
         <button id="comments-col-toggle" class="col-toggle-btn" title="Toggle comments column">&#128172; Comments</button>
         <!-- Presentation mode is JS-only (#452), so the button stays hidden
              until app.js confirms a warm renderer and a slide-shaped doc. -->
@@ -23,10 +24,14 @@
 </div>
 
 <div class="view-layout">
-    <!-- File navigator -->
-    <nav class="file-nav" id="file-nav">
+    {# DR-14: the file tree and its filter open over the text from the Files
+       button, so the left column holds only the document's own Contents. #}
+    <div class="files-panel" id="files-panel" hidden>
         <input type="text" class="file-nav-filter" id="nav-filter" placeholder="Filter files…" autocomplete="off">
         <div class="file-nav-tree" id="file-nav-tree"></div>
+    </div>
+    <!-- Contents column -->
+    <nav class="file-nav" id="file-nav">
         {% if toc_specs %}
         <div class="toc-section">
             <div class="toc-heading">Contents</div>
@@ -115,6 +120,7 @@
 <script src="/static/deck_dom.js?v={{ static_version('deck_dom.js') }}"></script>
 <script src="/static/mermaid_init.js?v={{ static_version('mermaid_init.js') }}"></script>
 <script src="/static/quote_mark.js?v={{ static_version('quote_mark.js') }}"></script>
+<script src="/static/files_panel.js?v={{ static_version('files_panel.js') }}"></script>
 <script src="/static/app.js?v={{ static_version('app.js') }}"></script>
 <script type="module">
 // ── Mermaid diagram rendering (reusable for re-render after Pyodide) ──

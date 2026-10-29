@@ -123,6 +123,18 @@
      * the renderer is warm.  The routing logic below deliberately stays in JS:
      * it decides what happens BEFORE the renderer is warm. */
 
+    /* Does this event close the Files panel (DR-14)?  `e` is a plain record
+     * built by app.js: {type, key, inPanel, onToggle, onLink}.  Escape always
+     * closes; a click closes unless it lands inside the panel, but picking a
+     * file closes it too.  The Files button toggles the panel itself, so a
+     * click on it is left to that handler. */
+    function filesPanelCloses(e) {
+        if (e.type === "keydown") return e.key === "Escape";
+        if (e.onToggle) return false;
+        if (e.onLink) return true;
+        return !e.inPanel;
+    }
+
     var api = {
         viewUrl: viewUrl,
         isDownload: isDownload,
@@ -135,6 +147,7 @@
         presentationControlAction: presentationControlAction,
         fullscreenChangeAction: fullscreenChangeAction,
         clampSlide: clampSlide,
+        filesPanelCloses: filesPanelCloses,
     };
 
     if (typeof module !== "undefined" && module.exports) {
