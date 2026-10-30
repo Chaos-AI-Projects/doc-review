@@ -381,6 +381,12 @@ body:not(:has(.file-nav .toc-section)) #nav-col-toggle {
     cursor: pointer;
 }
 
+/* An image is as wide as its file says, which for a screenshot is often wider
+ * than the review column (DR-17). */
+.line-content img {
+    max-width: 100%;
+}
+
 /* ── Paragraph and quote indent inside source lines ── */
 /* The `*` reset at the top of this file zeroes every margin, and #388 gave the
  * indent back to lists only.  Paragraphs and blockquotes were leaning on those

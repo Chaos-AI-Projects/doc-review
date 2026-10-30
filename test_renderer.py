@@ -1,6 +1,9 @@
 """Tests for the markdown block renderer."""
 
 import re
+from pathlib import Path
+
+import pytest
 
 from renderer import _sanitize_html, extract_toc, render_markdown_blocks
 
@@ -731,3 +734,84 @@ def test_a_percent_encoded_climb_is_left_alone():
     assert _hrefs("[a](..%2f..%2fetc%2fpasswd)\n", "kb/index.md") == [
         "..%2f..%2fetc%2fpasswd"
     ]
+
+
+# ── Images (DR-17) ───────────────────────────────────────────────────────
+#
+# The sanitizer had no `img`, so `![alt](x.png)` rendered as an empty
+# paragraph and every screenshot in a reviewed document vanished.  An image now
+# renders, but only from this server's `/download` route: a `src` anywhere else
+# is dropped, so a document can never make the reader's browser fetch a remote
+# host, which would leak whatever the URL carries the moment the page loads.
+
+
+def _imgs(source, doc_path=None):
+    html = "".join(b["html"] for b in render_markdown_blocks(source, doc_path))
+    return re.findall(r"<img\b[^>]*>", html)
+
+
+def test_a_relative_image_renders_from_download():
+    assert _imgs("![shot](shots/a.png)\n", "docs/fleet/tutorial.md") == [
+        '<img src="/download?path=docs/fleet/shots/a.png" alt="shot">'
+    ]
+
+
+def test_an_image_keeps_its_title():
+    assert _imgs('![a](a.png "the caption")\n', "a.md") == [
+        '<img src="/download?path=a.png" alt="a" title="the caption">'
+    ]
+
+
+def test_an_image_resolves_like_a_link():
+    """Same resolution as a link to the same file, `..` segments included."""
+    assert _imgs("![](../img/b.jpg)\n", "kb/wiki/index.md") == [
+        '<img src="/download?path=kb/img/b.jpg" alt="">'
+    ]
+
+
+def test_a_download_src_written_by_the_author_is_kept():
+    assert _imgs("![x](/download?path=drafts/a.png)\n", "kb/index.md") == [
+        '<img src="/download?path=drafts/a.png" alt="x">'
+    ]
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "https://evil.example/p.png?d=secret",
+        "//evil.example/p.png",
+        "data:image/png;base64,AAAA",
+        "/view?path=a.md",
+        "/api/source?path=a.md",
+        "../../etc/x.png",
+        "a.gif",
+    ],
+)
+def test_an_image_from_anywhere_else_loses_its_src(src):
+    """Remote hosts, other routes, a climb out of the root, and a type the
+    server does not offer for download all render as alt text only."""
+    assert _imgs(f"![x]({src})\n", "kb/index.md") == ['<img alt="x">']
+
+
+def test_no_doc_path_keeps_no_relative_src():
+    """Without the document's path a relative src cannot be resolved, and the
+    browser would resolve it against `/view` instead."""
+    assert _imgs("![x](a.png)\n") == ['<img alt="x">']
+
+
+def test_sanitizer_keeps_only_the_image_attributes_it_knows():
+    out = _sanitize_html(
+        '<img src="/download?path=a.png" alt="a" onerror="alert(1)" width="9">'
+    )
+    assert out == '<img src="/download?path=a.png" alt="a">'
+
+
+def test_sanitizer_drops_a_src_that_only_contains_the_download_route():
+    out = _sanitize_html('<img src="https://evil.example/download?path=a.png">')
+    assert out == "<img>"
+
+
+def test_an_image_never_overflows_its_line():
+    css = (Path(__file__).parent / "static" / "style.css").read_text()
+    rule = re.search(r"\.line-content img\s*\{([^}]*)\}", css)
+    assert rule and re.search(r"max-width:\s*100%", rule.group(1))

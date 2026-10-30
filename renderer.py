@@ -18,7 +18,7 @@ from mdit_py_plugins.front_matter import front_matter_plugin
 # Allowed HTML tags for sanitized output (defense-in-depth).
 _ALLOWED_TAGS = frozenset({
     "a", "abbr", "b", "blockquote", "br", "code", "dd", "del", "div", "dl",
-    "dt", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "ins", "kbd",
+    "dt", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "img", "ins", "kbd",
     "li", "ol", "p", "pre", "q", "s", "samp", "small", "span", "strong",
     "sub", "sup", "table", "tbody", "td", "th", "thead", "tr", "tt", "u",
     "ul", "var",
@@ -30,6 +30,8 @@ _ALLOWED_ATTRS = {
     "abbr": {"title"},
     "code": {"class"},
     "div": {"class"},
+    # `src` survives only as a `/download` URL; see `_IMAGE_SRC_PREFIX`.
+    "img": {"src", "alt", "title"},
     "pre": {"class"},
     # A cell can also carry a `class`, which this table cannot express: it is
     # synthesized from `style` by `_CELL_ALIGN_RE` below, never copied from the
@@ -37,6 +39,13 @@ _ALLOWED_ATTRS = {
     "td": {"align"},
     "th": {"align"},
 }
+
+# The one place an image may load from (DR-17).  A `src` on a remote host would
+# make the reader's browser fetch it as the page loads, carrying whatever the
+# URL holds, and any other route on this server is not an image.  A relative
+# `src` arrives here already rewritten by `_resolve_doc_link`, so a prefix
+# check on the finished attribute is the whole rule.
+_IMAGE_SRC_PREFIX = "/download?path="
 
 _TAG_RE = re.compile(r"<(/?)(\w+)(\s[^>]*)?>", re.DOTALL)
 _ATTR_RE = re.compile(r'(\w+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|\S+)')
@@ -77,6 +86,8 @@ def _sanitize_html(html: str) -> str:
                     kept_attrs.append(f'class="align-{side.group(1).lower()}"')
                 continue
             if attr_name in allowed:
+                if attr_name == "src" and not attr_val.startswith(_IMAGE_SRC_PREFIX):
+                    continue
                 # Block dangerous URI schemes in href
                 if attr_name == "href" and re.match(
                     r"\s*(javascript|data|vbscript):", attr_val, re.IGNORECASE
@@ -379,6 +390,19 @@ def _new_parser(doc_path: str | None = None) -> MarkdownIt:
             return default(tokens, idx, options, env)
 
         md.renderer.rules["link_open"] = _link_open
+
+        # An image resolves exactly as a link to the same file would, which
+        # for the types the server offers is `/download`.  Anything else keeps
+        # its src here and loses it in `_sanitize_html`.
+        default_image = md.renderer.rules["image"]
+
+        def _image(tokens, idx, options, env):
+            resolved = _resolve_doc_link(tokens[idx].attrGet("src") or "", doc_path)
+            if resolved is not None:
+                tokens[idx].attrSet("src", resolved)
+            return default_image(tokens, idx, options, env)
+
+        md.renderer.rules["image"] = _image
     return md
 
 
