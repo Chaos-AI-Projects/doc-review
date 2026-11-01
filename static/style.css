@@ -568,6 +568,25 @@ body:not(:has(.file-nav .toc-section)) #nav-col-toggle {
     margin-bottom: 0;
 }
 
+/* A CSV/TSV record is its own one-row table (DR-19), one per review row, so
+ * the records line up only if every table spans the row and splits it the
+ * same way.  The renderer pads short records to the widest one; a fixed
+ * layout then gives each column the same width in every record. */
+.line-content table.csv-table,
+.standalone-document table.csv-table {
+    display: table;
+    width: 100%;
+    table-layout: fixed;
+    margin: 0;
+}
+
+.line-content table.csv-table th,
+.line-content table.csv-table td,
+.standalone-document table.csv-table th,
+.standalone-document table.csv-table td {
+    overflow-wrap: anywhere;
+}
+
 /* Header and body cells are bordered together.  Bordering only `td` leaves the
  * header row floating free of the grid it heads. */
 .line-content th,

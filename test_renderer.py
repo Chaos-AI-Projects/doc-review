@@ -815,3 +815,75 @@ def test_an_image_never_overflows_its_line():
     css = (Path(__file__).parent / "static" / "style.css").read_text()
     rule = re.search(r"\.line-content img\s*\{([^}]*)\}", css)
     assert rule and re.search(r"max-width:\s*100%", rule.group(1))
+
+
+# ── CSV / TSV tables (DR-19) ─────────────────────────────────────────────
+
+
+class TestTableFiles:
+    """A .csv or .tsv path renders as a table, one block per record."""
+
+    def test_csv_path_renders_one_block_per_record(self):
+        blocks = render_markdown_blocks("name,age\nann,3\nbob,4\n", "data/people.csv")
+        assert [(b["start_line"], b["end_line"]) for b in blocks] == [
+            (1, 1), (2, 2), (3, 3)
+        ]
+        assert [b["type"] for b in blocks] == ["table_header", "table_row", "table_row"]
+
+    def test_header_row_renders_th_and_body_rows_render_td(self):
+        header, row = render_markdown_blocks("name,age\nann,3\n", "people.csv")
+        assert "<th>name</th>" in header["html"] and "<th>age</th>" in header["html"]
+        assert "<td>ann</td>" in row["html"] and "<td>3</td>" in row["html"]
+        assert "<td>" not in header["html"]
+
+    def test_tsv_splits_on_tabs_not_commas(self):
+        _, row = render_markdown_blocks("a\tb\nx,y\tz\n", "t.TSV")
+        assert "<td>x,y</td>" in row["html"] and "<td>z</td>" in row["html"]
+
+    def test_csv_honours_quoted_fields(self):
+        _, row = render_markdown_blocks('a,b\n"one, two",3\n', "q.csv")
+        assert "<td>one, two</td>" in row["html"]
+
+    def test_a_quoted_newline_keeps_the_record_one_block_spanning_its_lines(self):
+        blocks = render_markdown_blocks('a,b\n"line1\nline2",x\nlast,y\n', "m.csv")
+        assert [(b["start_line"], b["end_line"]) for b in blocks] == [
+            (1, 1), (2, 3), (4, 4)
+        ]
+        assert blocks[1]["raw"] == '"line1\nline2",x'
+
+    def test_cells_are_escaped_not_parsed_as_markdown_or_html(self):
+        _, row = render_markdown_blocks("a,b\n<script>x</script>,**bold**\n", "e.csv")
+        assert "<script>" not in row["html"]
+        assert "&lt;script&gt;" in row["html"]
+        assert "<strong>" not in row["html"]
+
+    def test_short_rows_are_padded_so_columns_line_up(self):
+        blocks = render_markdown_blocks("a,b,c\n1\n", "p.csv")
+        assert blocks[1]["html"].count("<td") == 3
+
+    def test_blank_lines_are_not_blocks(self):
+        blocks = render_markdown_blocks("a,b\n\n1,2\n", "b.csv")
+        assert [(b["start_line"], b["end_line"]) for b in blocks] == [(1, 1), (3, 3)]
+
+    def test_block_ids_are_content_derived_like_markdown(self):
+        blocks = render_markdown_blocks("a,b\n1,2\n1,2\n", "d.csv")
+        assert blocks[1]["block_id"].endswith("-1")
+        assert blocks[2]["block_id"].endswith("-2")
+        assert blocks[1]["block_id"][:16] == blocks[2]["block_id"][:16]
+
+    def test_empty_table_is_one_empty_block(self):
+        blocks = render_markdown_blocks("", "e.csv")
+        assert len(blocks) == 1 and blocks[0]["html"] == ""
+
+    def test_markdown_path_is_unchanged(self):
+        assert render_markdown_blocks("a,b\n1,2\n", "x.md")[0]["type"] == "paragraph"
+
+    def test_an_unbalanced_quote_falls_back_to_plain_split_rather_than_raising(self):
+        # A stray `"` swallows the rest of a big file into one field, which the
+        # csv module refuses past its field limit; the page must still render.
+        source = 'a,b\n"x,' + "y" * 200_000 + "\nlast,row\n"
+        blocks = render_markdown_blocks(source, "big.csv")
+        assert [(b["start_line"], b["end_line"]) for b in blocks] == [
+            (1, 1), (2, 2), (3, 3)
+        ]
+        assert "<td>last</td>" in blocks[2]["html"]

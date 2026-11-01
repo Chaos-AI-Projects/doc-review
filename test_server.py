@@ -9648,3 +9648,74 @@ class TestFavicon:
             assert root.find(f".//{ns}text") is None, path
             ids = {el.get("id") for el in root.iter() if el.get("id")}
             assert {"page", "fold", "bubble"} <= ids, (path, ids)
+
+
+class TestTableFiles:
+    """DR-19: .csv and .tsv are listed and reviewed at /view as tables."""
+
+    @pytest.fixture
+    def table_client(self, source_dir):
+        root = Path(source_dir)
+        (root / "people.csv").write_text("name,age\nann,3\n# bob,4\n")
+        (root / "sub" / "tabs.tsv").write_text("k\tv\nx\ty\n")
+        configure(source_dir, root / "test_comments.db")
+        return TestClient(app)
+
+    def test_index_lists_tables_as_viewable(self, table_client):
+        text = table_client.get("/").text
+        assert 'href="/view?path=people.csv"' in text
+        assert f'href="/view?path={quote("sub/tabs.tsv")}"' in text
+
+    def test_view_renders_a_table(self, table_client):
+        resp = table_client.get("/view?path=people.csv")
+        assert resp.status_code == 200
+        assert "<th>name</th>" in resp.text and "<td>ann</td>" in resp.text
+
+    def test_api_source_serves_tables_with_no_toc(self, table_client):
+        resp = table_client.get("/api/source?path=people.csv")
+        assert resp.status_code == 200
+        # A record that starts with `#` is a cell, not a heading.
+        assert resp.json()["toc"] == []
+        assert "<td># bob</td>" in table_client.get("/view?path=people.csv").text
+
+    def test_the_browser_render_is_handed_the_path_that_picks_the_table(
+        self, table_client
+    ):
+        """Pyodide re-renders every page and overwrites the server's html, so
+        the table path must be chosen from the path the client passes, not from
+        anything only the server knows."""
+        text = table_client.get("/view?path=people.csv").text
+        assert "render_markdown_blocks(_source, _doc_path)" in text
+        app_js = table_client.get("/static/app.js").text
+        assert "renderer.renderBlocks(data.source, data.path)" in app_js
+        assert "renderer.renderBlocks(source, currentPath)" in app_js
+        blocks = render_markdown_blocks("name,age\nann,3\n", "people.csv")
+        assert blocks[0]["type"] == "table_header"
+
+    def test_a_comment_anchors_to_its_record(self, table_client):
+        payload = {"file_id": "x", "path": "sub/tabs.tsv", "line_start": 2,
+                   "line_end": 2, "body": "check y", "quote": "y"}
+        created = table_client.post("/api/comments", json=payload)
+        assert created.status_code == 201
+        row = render_markdown_blocks("k\tv\nx\ty\n", "tabs.tsv")[1]
+        assert created.json()["block_id"] == row["block_id"]
+        listed = table_client.get("/api/comments?path=sub/tabs.tsv").json()
+        assert [(c["body"], c["line_start"]) for c in listed] == [("check y", 2)]
+        view = table_client.get(f"/view?path={quote('sub/tabs.tsv')}").text
+        assert "check y" in view
+
+    def test_form_comment_and_resolve_accept_tables(self, table_client):
+        form = {"file_id": "x", "path": "people.csv", "line_start": "2",
+                "line_end": "2", "body": "b"}
+        resp = table_client.post("/comment", data=form, follow_redirects=False)
+        assert resp.status_code == 303
+        cid = table_client.get("/api/comments?path=people.csv").json()[0]["id"]
+        assert table_client.post(
+            f"/comment/{cid}/resolve", data={"path": "people.csv"},
+            follow_redirects=False,
+        ).status_code == 303
+
+    def test_blame_accepts_tables(self, table_client):
+        # Untracked, so blame itself answers 404, but not the type refusal's.
+        resp = table_client.get("/api/blame?path=people.csv")
+        assert resp.json()["detail"] != "File not found"

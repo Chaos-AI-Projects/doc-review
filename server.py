@@ -45,7 +45,8 @@ from db import (
 from file_id import derive_file_id
 from renderer import (
     DOWNLOAD_EXTS,
-    MARKDOWN_EXTS,
+    REVIEW_EXTS,
+    TABLE_EXTS,
     extract_toc,
     normalized_offset,
     raw_offset,
@@ -221,9 +222,20 @@ def _resolve_typed_file(rel_path: str, exts: frozenset[str]) -> Path:
     return target
 
 
+def _anchor_blocks(source: str, target: Path) -> list[dict]:
+    """Blocks of the file at *target*, for anchoring comments rather than display.
+
+    A table's blocks are its records, so it names its extension (DR-19).
+    Markdown passes no path: a path changes only the html, which anchoring
+    never reads.
+    """
+    is_table = target.suffix.lower() in TABLE_EXTS
+    return render_markdown_blocks(source, target.name if is_table else None)
+
+
 def _list_files(root: Path) -> list[str]:
-    """Recursively list markdown and downloadable files under *root*."""
-    exts = MARKDOWN_EXTS | DOWNLOAD_EXTS
+    """Recursively list reviewable and downloadable files under *root*."""
+    exts = REVIEW_EXTS | DOWNLOAD_EXTS
     files = []
     for p in sorted(root.rglob("*")):
         # A symlink is judged by its target too, the way the routes judge it.
@@ -482,7 +494,7 @@ def _block_anchor_for_new_comment(
         source = target.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None, None, None
-    block = _block_at_line(render_markdown_blocks(source), line_start)
+    block = _block_at_line(_anchor_blocks(source, target), line_start)
     if block is None:
         return None, None, None
     offset = normalized_offset(block["raw"], line_start - block["start_line"])
@@ -879,7 +891,7 @@ def _rendered_block_of(comment: dict, target: Path) -> dict | None:
         source = target.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    blocks = render_markdown_blocks(source)
+    blocks = _anchor_blocks(source, target)
     if not blocks:
         return None
     by_digest: dict[str, list[dict]] = {}
@@ -1087,12 +1099,13 @@ def build_view_payload(path: str) -> dict:
     Single source of truth shared by ``/view`` (server-side render) and
     ``/api/source`` (SPA soft navigation, #447) so the two cannot drift.
     """
-    file_path = _resolve_typed_file(path, MARKDOWN_EXTS)
+    file_path = _resolve_typed_file(path, REVIEW_EXTS)
     source = file_path.read_text(encoding="utf-8", errors="replace")
     # `path` is passed so links relative to this file resolve against its own
     # directory rather than against `/view`, where the browser sits.
     blocks = render_markdown_blocks(source, path)
-    toc = extract_toc(source)
+    # A table has no headings; a record starting with `#` is a cell.
+    toc = [] if file_path.suffix.lower() in TABLE_EXTS else extract_toc(source)
     fid = derive_file_id(str(file_path))
 
     conn = _conn()
@@ -1220,7 +1233,7 @@ async def add_comment(
     selected: str | None = Form(None, alias="quote"),
 ):
     """Create a comment (or reply) and redirect back to the file view."""
-    target = _resolve_typed_file(path, MARKDOWN_EXTS)  # validate path is inside source root
+    target = _resolve_typed_file(path, REVIEW_EXTS)  # validate path is inside source root
     selected = _quote_for_new_comment(selected)
     block_id, block_offset, block_context = _block_anchor_for_new_comment(
         target, line_start
@@ -1254,7 +1267,7 @@ async def add_comment(
 
 @app.post("/comment/{comment_id}/resolve")
 async def resolve(comment_id: int, path: str = Form(...)):
-    _resolve_typed_file(path, MARKDOWN_EXTS)
+    _resolve_typed_file(path, REVIEW_EXTS)
     _reject_unusable_comment_id(comment_id)
     conn = _conn()
     try:
@@ -1266,7 +1279,7 @@ async def resolve(comment_id: int, path: str = Form(...)):
 
 @app.post("/comment/{comment_id}/unresolve")
 async def unresolve(comment_id: int, path: str = Form(...)):
-    _resolve_typed_file(path, MARKDOWN_EXTS)
+    _resolve_typed_file(path, REVIEW_EXTS)
     _reject_unusable_comment_id(comment_id)
     conn = _conn()
     try:
@@ -1288,7 +1301,7 @@ async def api_get_comments(path: str = Query(...)):
     the same placement ``/view`` shows, through the same code (#468).
     """
     # Validates the path is inside the source root, returns 403/404.
-    file_path = _resolve_typed_file(path, MARKDOWN_EXTS)
+    file_path = _resolve_typed_file(path, REVIEW_EXTS)
     source = file_path.read_text(encoding="utf-8", errors="replace")
     conn = _conn()
     try:
@@ -1296,7 +1309,7 @@ async def api_get_comments(path: str = Query(...)):
             conn,
             path,
             file_path,
-            render_markdown_blocks(source),
+            _anchor_blocks(source, file_path),
             len(source.splitlines()),
         )
         # Sorted by the *placed* line, so the listing reads in the order the
@@ -1321,7 +1334,7 @@ class _CommentCreate(BaseModel):
 @app.post("/api/comments", status_code=201)
 async def api_post_comment(payload: _CommentCreate, request: Request):
     """Create a comment from a JSON body, return the created comment as JSON."""
-    target = _resolve_typed_file(payload.path, MARKDOWN_EXTS)
+    target = _resolve_typed_file(payload.path, REVIEW_EXTS)
     selected = _quote_for_new_comment(payload.quote)
     block_id, block_offset, block_context = _block_anchor_for_new_comment(
         target, payload.line_start
@@ -1363,7 +1376,7 @@ async def api_blame(path: str = Query(...)):
     Response: ``{"lines": [{"line": int, "commit": str, "author": str,
     "date": str, "content": str}, ...]}``
     """
-    target = _resolve_typed_file(path, MARKDOWN_EXTS)
+    target = _resolve_typed_file(path, REVIEW_EXTS)
     d = str(target.parent)
     name = target.name
     try:
