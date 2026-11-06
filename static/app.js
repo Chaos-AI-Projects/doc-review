@@ -118,8 +118,9 @@
         }
     }
 
-    /* A PDF or image links to /download and carries no data-path, so the SPA
-     * click handler leaves it to the browser (DR-5). */
+    /* A PDF or image links to /download, and an HTML file to /open in a new
+     * tab (DR-20).  Neither carries a data-path, so the SPA click handler
+     * leaves it to the browser (DR-5). */
     function fileLink(path, label) {
         var a = document.createElement("a");
         a.className = "file-nav-link";
@@ -128,6 +129,12 @@
         if (logic && logic.isDownload(path)) {
             a.href = logic.downloadUrl(path);
             a.setAttribute("download", "");
+            return a;
+        }
+        if (logic && logic.isOpen(path)) {
+            a.href = logic.openUrl(path);
+            a.target = "_blank";
+            a.rel = "noopener";
             return a;
         }
         a.href = "/view?path=" + encodeURIComponent(path);

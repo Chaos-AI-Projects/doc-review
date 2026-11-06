@@ -25,6 +25,18 @@
         return "/download?path=" + encodeURIComponent(path);
     }
 
+    /* An HTML file opens in a new tab at /open (DR-20).  Mirrors OPEN_EXTS in
+     * renderer.py. */
+    var OPEN_EXT_RE = /\.html?$/i;
+
+    function isOpen(path) {
+        return OPEN_EXT_RE.test(path || "");
+    }
+
+    function openUrl(path) {
+        return "/open?path=" + encodeURIComponent(path);
+    }
+
     function apiSourceUrl(path) {
         return "/api/source?path=" + encodeURIComponent(path);
     }
@@ -139,6 +151,8 @@
         viewUrl: viewUrl,
         isDownload: isDownload,
         downloadUrl: downloadUrl,
+        isOpen: isOpen,
+        openUrl: openUrl,
         apiSourceUrl: apiSourceUrl,
         shouldIntercept: shouldIntercept,
         popstateAction: popstateAction,

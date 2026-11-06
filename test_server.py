@@ -128,7 +128,7 @@ class TestDownloads:
         for f in ("paper.pdf", "sub/shot.PNG", "pic.jpg", "pic2.jpeg", "logo.svg"):
             assert f'href="/download?path={quote(f)}"' in text, f
             assert f"/view?path={quote(f)}" not in text, f
-        for f in ("notes.txt", "page.html", "secret.env", "test_comments.db"):
+        for f in ("notes.txt", "secret.env", "test_comments.db"):
             assert f not in text, f
         assert 'href="/view?path=test.md"' in text
 
@@ -145,7 +145,8 @@ class TestDownloads:
         ).group(1)
         files = json.loads(data)
         assert "paper.pdf" in files and "test.md" in files
-        assert "notes.txt" not in files and "page.html" not in files
+        assert "page.html" in files
+        assert "notes.txt" not in files
 
     def test_download_serves_attachment(self, mixed_client):
         resp = mixed_client.get("/download?path=paper.pdf")
@@ -175,7 +176,7 @@ class TestDownloads:
     def test_download_traversal_blocked(self, mixed_client, tmp_path):
         assert mixed_client.get("/download?path=../../etc/passwd").status_code in (403, 404)
 
-    @pytest.mark.parametrize("path", ["notes.txt", "secret.env", "paper.pdf"])
+    @pytest.mark.parametrize("path", ["notes.txt", "secret.env", "paper.pdf", "page.html"])
     def test_blame_and_comment_routes_refuse_non_markdown(self, mixed_client, path):
         """Every route that reads a file is markdown-only, not just /view."""
         c = mixed_client
@@ -207,6 +208,63 @@ class TestDownloads:
     def test_view_refuses_non_markdown(self, mixed_client, path):
         assert mixed_client.get(f"/view?path={path}").status_code == 404
         assert mixed_client.get(f"/api/source?path={path}").status_code == 404
+
+
+class TestOpenHtml:
+    """DR-20: an HTML file opens in a new tab rather than downloading."""
+
+    @pytest.fixture
+    def html_client(self, source_dir):
+        root = Path(source_dir)
+        (root / "page.html").write_text("<p>hi</p>")
+        (root / "sub" / "old.HTM").write_text("<p>old</p>")
+        (root / "paper.pdf").write_bytes(b"%PDF-1.4 fake")
+        (root / "notes.txt").write_text("plain text")
+        configure(source_dir, root / "test_comments.db")
+        return TestClient(app)
+
+    def test_index_opens_html_in_a_new_tab(self, html_client):
+        text = html_client.get("/").text
+        for f in ("page.html", "sub/old.HTM"):
+            link = re.search(rf'<a href="/open\?path={re.escape(quote(f))}"[^>]*>', text)
+            assert link, f
+            assert 'target="_blank"' in link.group(0)
+            assert 'rel="noopener"' in link.group(0)
+            assert "download" not in link.group(0)
+            assert f"/view?path={quote(f)}" not in text
+            assert f"/download?path={quote(f)}" not in text
+
+    def test_open_serves_html_inline(self, html_client):
+        resp = html_client.get("/open?path=page.html")
+        assert resp.status_code == 200
+        assert resp.content == b"<p>hi</p>"
+        assert resp.headers["content-type"].startswith("text/html")
+        assert not resp.headers.get("content-disposition", "").startswith("attachment")
+
+    def test_open_uppercase_htm(self, html_client):
+        resp = html_client.get("/open?path=sub/old.HTM")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+
+    def test_open_runs_no_script_on_this_origin(self, html_client):
+        """A sandboxed page has an opaque origin and no script, so it cannot
+        reach the comment API with the reader's identity."""
+        resp = html_client.get("/open?path=page.html")
+        assert resp.headers["content-security-policy"] == "sandbox"
+        assert resp.headers["x-content-type-options"] == "nosniff"
+
+    @pytest.mark.parametrize("path", ["paper.pdf", "notes.txt", "test.md", "test_comments.db"])
+    def test_open_refuses_other_files(self, html_client, path):
+        assert html_client.get(f"/open?path={path}").status_code == 404
+
+    def test_open_missing_file(self, html_client):
+        assert html_client.get("/open?path=nope.html").status_code == 404
+
+    def test_open_traversal_blocked(self, html_client):
+        assert html_client.get("/open?path=../../etc/passwd.html").status_code in (403, 404)
+
+    def test_download_still_refuses_html(self, html_client):
+        assert html_client.get("/download?path=page.html").status_code == 404
 
 
 class TestCommentFlow:

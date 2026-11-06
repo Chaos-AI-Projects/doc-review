@@ -45,6 +45,7 @@ from db import (
 from file_id import derive_file_id
 from renderer import (
     DOWNLOAD_EXTS,
+    OPEN_EXTS,
     REVIEW_EXTS,
     TABLE_EXTS,
     extract_toc,
@@ -210,6 +211,14 @@ def _is_download(rel_path: str) -> bool:
 templates.env.globals["is_download"] = _is_download
 
 
+def _is_open(rel_path: str) -> bool:
+    """Whether *rel_path* is opened in a new tab at ``/open`` (DR-20)."""
+    return Path(rel_path).suffix.lower() in OPEN_EXTS
+
+
+templates.env.globals["is_open"] = _is_open
+
+
 def _resolve_typed_file(rel_path: str, exts: frozenset[str]) -> Path:
     """Resolve *rel_path* like ``_resolve_file``, refusing other extensions.
 
@@ -234,8 +243,8 @@ def _anchor_blocks(source: str, target: Path) -> list[dict]:
 
 
 def _list_files(root: Path) -> list[str]:
-    """Recursively list reviewable and downloadable files under *root*."""
-    exts = REVIEW_EXTS | DOWNLOAD_EXTS
+    """Recursively list reviewable, downloadable and openable files under *root*."""
+    exts = REVIEW_EXTS | DOWNLOAD_EXTS | OPEN_EXTS
     files = []
     for p in sorted(root.rglob("*")):
         # A symlink is judged by its target too, the way the routes judge it.
@@ -1196,6 +1205,24 @@ async def download_file(path: str = Query(...)):
         target,
         filename=target.name,
         content_disposition_type="attachment",
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "sandbox",
+        },
+    )
+
+
+@app.get("/open")
+async def open_file(path: str = Query(...)):
+    """Serve an HTML file inline, for the browser to show in a new tab (DR-20).
+
+    ``sandbox`` gives the page an opaque origin and runs none of its script, so
+    a file in the vault cannot act on this server as the reader.
+    """
+    target = _resolve_typed_file(path, OPEN_EXTS)
+    return FileResponse(
+        target,
+        media_type="text/html",
         headers={
             "X-Content-Type-Options": "nosniff",
             "Content-Security-Policy": "sandbox",

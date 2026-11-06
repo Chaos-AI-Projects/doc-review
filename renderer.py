@@ -298,6 +298,10 @@ TABLE_DELIMITERS = {".csv": ",", ".tsv": "\t"}
 TABLE_EXTS = frozenset(TABLE_DELIMITERS)
 REVIEW_EXTS = MARKDOWN_EXTS | TABLE_EXTS
 DOWNLOAD_EXTS = frozenset({".pdf", ".jpg", ".jpeg", ".png", ".svg"})
+# HTML opens in the browser at `/open`, in a new tab, rather than downloading
+# (DR-20).  It is not reviewable: comments anchor to source lines, and a page
+# is read as rendered.
+OPEN_EXTS = frozenset({".html", ".htm"})
 
 
 def _leaves_root(resolved: str) -> bool:
@@ -359,8 +363,14 @@ def _resolve_doc_link(href: str, doc_path: str) -> str | None:
     # is its own answer to give, not markdown-it's to be trusted for.
     # `/view` refuses a PDF or an image, so the link offers it for download.
     # A fragment means nothing to a downloaded file and is dropped.
-    if posixpath.splitext(resolved)[1].lower() in DOWNLOAD_EXTS:
+    ext = posixpath.splitext(resolved)[1].lower()
+    if ext in DOWNLOAD_EXTS:
         return f"/download?path={quote(resolved, safe='/%')}"
+    if ext in OPEN_EXTS:
+        return (
+            f"/open?path={quote(resolved, safe='/%')}"
+            f"{sep}{quote(fragment, safe='/%')}"
+        )
 
     return (
         f"/view?path={quote(resolved, safe='/%')}"

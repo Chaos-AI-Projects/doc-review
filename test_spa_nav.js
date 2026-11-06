@@ -217,6 +217,14 @@ assert("isDownload md", nav.isDownload("x.md"), false);
 assert("isDownload dotted dir", nav.isDownload("a.pdf/x.md"), false);
 assert("downloadUrl", nav.downloadUrl("a b/c.pdf"), "/download?path=a%20b%2Fc.pdf");
 
+// DR-20: an HTML file opens in a new tab at /open, never soft-swapped.
+assert("isOpen html", nav.isOpen("a/b.html"), true);
+assert("isOpen HTM upper", nav.isOpen("x.HTM"), true);
+assert("isOpen md", nav.isOpen("x.md"), false);
+assert("isOpen dotted dir", nav.isOpen("a.html/x.md"), false);
+assert("isDownload html", nav.isDownload("x.html"), false);
+assert("openUrl", nav.openUrl("a b/c.html"), "/open?path=a%20b%2Fc.html");
+
 // ── Files panel (DR-14): when does an event close it? ──
 function pe(over) {
     var base = { type: "click", key: "", inPanel: false, onToggle: false, onLink: false };

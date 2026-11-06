@@ -7,12 +7,14 @@
     {% for f in files %}
     {% if is_download(f) %}
     <li><a href="/download?path={{ f | urlencode }}" download>{{ f }}</a></li>
+    {% elif is_open(f) %}
+    <li><a href="/open?path={{ f | urlencode }}" target="_blank" rel="noopener">{{ f }}</a></li>
     {% else %}
     <li><a href="/view?path={{ f | urlencode }}">{{ f }}</a></li>
     {% endif %}
     {% endfor %}
 </ul>
 {% else %}
-<p>No markdown, PDF or image files found.</p>
+<p>No markdown, table, HTML, PDF or image files found.</p>
 {% endif %}
 {% endblock %}

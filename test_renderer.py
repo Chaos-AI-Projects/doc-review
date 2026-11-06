@@ -676,6 +676,14 @@ def test_a_link_to_a_pdf_or_image_resolves_to_download():
         assert _hrefs(f"[i](a.{ext})\n", "a.md") == [f"/download?path=a.{ext}"]
 
 
+def test_a_link_to_an_html_file_resolves_to_open():
+    """DR-20: an HTML file opens at /open, keeping the fragment it points at."""
+    assert _hrefs("[r](../out/report.html#s2)\n", "kb/wiki/index.md") == [
+        "/open?path=kb/out/report.html#s2"
+    ]
+    assert _hrefs("[r](old.HTM)\n", "a.md") == ["/open?path=old.HTM"]
+
+
 def test_absolute_and_in_page_links_are_left_alone():
     """Only a relative path is ambiguous; everything else already resolves."""
     source = (
