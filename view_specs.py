@@ -430,6 +430,24 @@ def presentation_specs(blocks, comments_by_block=None, source=""):
     }
 
 
+# Characters a path keeps unescaped in a query value: encodeURIComponent's
+# set plus "/", so a nested path stays readable in the address bar.
+_URL_SAFE = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~/"
+)
+
+
+def _url_quote(text):
+    """*text* percent-encoded as UTF-8 for a query value, without urllib."""
+    out = []
+    for ch in text:
+        if ch in _URL_SAFE:
+            out.append(ch)
+        else:
+            out.extend("%{:02X}".format(b) for b in ch.encode("utf-8"))
+    return "".join(out)
+
+
 def header_fields(data):
     """Header + comment-form fields for a document.
 
@@ -448,4 +466,6 @@ def header_fields(data):
         "documentTitle": "doc-review \u2014 " + data["path"],
         "formFileId": data["file_id"],
         "formPath": data["path"],
+        # DR-21: the Download button saves the file's raw source.
+        "downloadUrl": "/download?path=" + _url_quote(path),
     }

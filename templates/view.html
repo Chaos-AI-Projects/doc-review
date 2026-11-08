@@ -8,6 +8,8 @@
     <span class="col-toggles">
         <button id="nav-col-toggle" class="col-toggle-btn" title="Toggle the Contents column">&#9776; Contents</button>
         <button id="comments-col-toggle" class="col-toggle-btn" title="Toggle comments column">&#128172; Comments</button>
+        {# DR-21: saves the raw source of the file on screen. #}
+        <a id="download-source" class="col-toggle-btn" href="{{ header.downloadUrl }}" download title="Download the source of this file">&#11015; Download</a>
         <!-- Presentation mode is JS-only (#452), so the button stays hidden
              until app.js confirms a warm renderer and a slide-shaped doc. -->
         <button id="present-toggle" class="col-toggle-btn" title="Present as slides (Esc returns to review)" hidden>&#9654; Present</button>

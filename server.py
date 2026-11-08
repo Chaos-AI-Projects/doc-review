@@ -1195,12 +1195,13 @@ async def view_file(request: Request, path: str = Query(...)):
 
 @app.get("/download")
 async def download_file(path: str = Query(...)):
-    """Serve a PDF or image as an attachment (DR-5).
+    """Serve a PDF or image as an attachment (DR-5), or a reviewable file's
+    raw source for the header's Download button (DR-21).
 
     ``attachment`` rather than inline matters most for SVG, which can carry
     script and would otherwise run on this origin.
     """
-    target = _resolve_typed_file(path, DOWNLOAD_EXTS)
+    target = _resolve_typed_file(path, DOWNLOAD_EXTS | REVIEW_EXTS)
     return FileResponse(
         target,
         filename=target.name,

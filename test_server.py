@@ -156,6 +156,29 @@ class TestDownloads:
         assert resp.headers["content-disposition"].startswith("attachment")
         assert "paper.pdf" in resp.headers["content-disposition"]
 
+    def test_download_serves_markdown_source(self, mixed_client, source_dir):
+        """DR-21: a reviewable file can also be saved as its raw source."""
+        resp = mixed_client.get("/download?path=sub/nested.md")
+        assert resp.status_code == 200
+        assert resp.content == (Path(source_dir) / "sub" / "nested.md").read_bytes()
+        assert resp.headers["content-type"].startswith("text/markdown")
+        assert resp.headers["content-disposition"].startswith("attachment")
+        assert "nested.md" in resp.headers["content-disposition"]
+
+    def test_view_header_links_the_markdown_download(self, mixed_client):
+        text = mixed_client.get("/view?path=sub/nested.md").text
+        assert re.search(
+            r'<a [^>]*id="download-source"[^>]*>', text
+        ), "no Download button in the header"
+        tag = re.search(r'<a [^>]*id="download-source"[^>]*>', text).group(0)
+        assert 'href="/download?path=sub/nested.md"' in tag
+        assert re.search(r"\bdownload\b", tag.replace('id="download-source"', ""))
+
+    def test_index_still_links_markdown_to_view(self, mixed_client):
+        text = mixed_client.get("/").text
+        assert 'href="/view?path=test.md"' in text
+        assert "/download?path=test.md" not in text
+
     def test_download_svg_is_an_attachment_not_inline(self, mixed_client):
         resp = mixed_client.get("/download?path=logo.svg")
         assert resp.status_code == 200
@@ -165,7 +188,7 @@ class TestDownloads:
         assert mixed_client.get("/download?path=sub/shot.PNG").status_code == 200
 
     @pytest.mark.parametrize(
-        "path", ["notes.txt", "page.html", "secret.env", "test.md", "test_comments.db"]
+        "path", ["notes.txt", "page.html", "secret.env", "test_comments.db"]
     )
     def test_download_refuses_other_files(self, mixed_client, path):
         assert mixed_client.get(f"/download?path={path}").status_code == 404

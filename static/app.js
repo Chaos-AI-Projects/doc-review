@@ -510,6 +510,8 @@
         var fidEl = document.querySelector(".file-header .file-id");
         if (fidEl) fidEl.textContent = fields.fileIdLabel;
         document.title = fields.documentTitle;
+        var dl = document.getElementById("download-source");
+        if (dl) dl.href = fields.downloadUrl;
 
         // Comments must be posted against the file now on screen, not the one
         // the page was originally served with.

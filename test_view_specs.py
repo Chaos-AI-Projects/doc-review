@@ -136,6 +136,14 @@ class TestHeaderFields:
     def test_document_title_follows_the_path(self, fields):
         assert fields["documentTitle"] == "doc-review \u2014 kb/wiki/log.md"
 
+    def test_download_url_points_at_the_source(self, fields):
+        """DR-21: the header's Download button fetches the file's own source."""
+        assert fields["downloadUrl"] == "/download?path=kb/wiki/log.md"
+
+    def test_download_url_escapes_the_path(self):
+        fields = header_fields({"path": "notes/a b&c#d\u00e9.md", "file_id": "0" * 32})
+        assert fields["downloadUrl"] == "/download?path=notes/a%20b%26c%23d%C3%A9.md"
+
     def test_comment_form_carries_the_file_id(self, fields):
         assert fields["formFileId"] == "0123456789abcdef0123456789abcdef"
 
